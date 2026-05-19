@@ -34,6 +34,7 @@ from datetime import datetime
 
 from heidstar_flat.config import AppConfig, load_config, save_config
 from heidstar_flat.core.loader import DiscoveredChannel, discover_channels
+from heidstar_flat.core.metrics import VerdictThresholds
 from heidstar_flat.core.report import generate_pdf_report
 from heidstar_flat.ui.channel_tab import ChannelTab
 from heidstar_flat.ui.settings_dialog import SettingsDialog
@@ -43,6 +44,17 @@ from heidstar_flat.worker import (
     FlatfieldWorker,
     make_worker_thread,
 )
+
+
+def _build_thresholds(cfg: AppConfig, per_channel_threshold: float) -> VerdictThresholds:
+    return VerdictThresholds(
+        robust_min_max_pct=per_channel_threshold,
+        cv_pct=cfg.cv_threshold,
+        corner_symmetry_pct=cfg.corner_symmetry_threshold,
+        center_to_max_pct=cfg.center_to_max_threshold,
+        min_zone_to_max_pct=cfg.min_zone_to_max_threshold,
+        nine_zone_uniformity_pct=cfg.nine_zone_uniformity_threshold,
+    )
 
 
 class MainWindow(QMainWindow):
@@ -245,11 +257,8 @@ class MainWindow(QMainWindow):
         for ch in self._discovered:
             pref = self.cfg.pref_for(ch.suffix)
             display = pref.display_name or ch.display_name
-            tab = ChannelTab(
-                ch.suffix, display,
-                pref.uniformity_threshold,
-                self.cfg.cv_threshold,
-            )
+            thresholds = _build_thresholds(self.cfg, pref.uniformity_threshold)
+            tab = ChannelTab(ch.suffix, display, thresholds)
             tab.update_from_discovery(ch)
             self.tabs.addTab(tab, display)
             self._tabs_by_suffix[ch.suffix] = tab
@@ -303,8 +312,9 @@ class MainWindow(QMainWindow):
                 ChannelJob(
                     discovered=ch,
                     display_name=display,
-                    threshold=pref.uniformity_threshold,
-                    cv_threshold=self.cfg.cv_threshold,
+                    thresholds=_build_thresholds(
+                        self.cfg, pref.uniformity_threshold
+                    ),
                 )
             )
         return jobs
@@ -337,7 +347,7 @@ class MainWindow(QMainWindow):
         for i, j in enumerate(jobs, 1):
             tab = self._tabs_by_suffix.get(j.suffix)
             if tab is not None:
-                tab.reset(j.threshold, j.cv_threshold)
+                tab.reset(j.thresholds)
                 tab.set_queue_position(i, total)
 
         self.log_view.clear()

@@ -20,6 +20,8 @@ from heidstar_flat.core.loader import DiscoveredChannel, load_channel_tiles
 from heidstar_flat.core.metrics import (
     ExampleTriplet,
     UniformityMetrics,
+    VerdictResult,
+    VerdictThresholds,
     build_examples,
     compute_metrics,
     evaluate_verdict,
@@ -28,12 +30,11 @@ from heidstar_flat.core.metrics import (
 
 @dataclass
 class ChannelJob:
-    """一个待处理通道：发现结果 + 阈值 + 显示名。"""
+    """一个待处理通道：发现结果 + 全部阈值 + 显示名。"""
 
     discovered: DiscoveredChannel
     display_name: str
-    threshold: float        # 主指标 (robust Min/Max P1/P99) 阈值
-    cv_threshold: float     # 第二指标 (CV) 阈值
+    thresholds: VerdictThresholds
 
     @property
     def suffix(self) -> str:
@@ -47,13 +48,21 @@ class ChannelResult:
     flatfield_normalized: np.ndarray
     metrics: UniformityMetrics
     examples: List[ExampleTriplet]
-    passed: bool
-    verdict_reason: str          # 判定原因（PASS 摘要 / FAIL 列出失败项）
+    verdict: VerdictResult
     output_dir: Path
 
     @property
     def suffix(self) -> str:
         return self.job.suffix
+
+    # 向后兼容（PDF/老代码可能还用 .passed / .verdict_reason）
+    @property
+    def passed(self) -> bool:
+        return self.verdict.passed
+
+    @property
+    def verdict_reason(self) -> str:
+        return self.verdict.reason
 
 
 class FlatfieldWorker(QObject):
@@ -134,9 +143,7 @@ class FlatfieldWorker(QObject):
 
             self.stage_changed.emit(suffix, "计算均匀性指标")
             normalized, metrics = compute_metrics(flatfield)
-            ok, reason = evaluate_verdict(
-                metrics, job.threshold, job.cv_threshold
-            )
+            verdict = evaluate_verdict(metrics, job.thresholds)
             self.log.emit(
                 f"[{suffix}] robust Min/Max={metrics.robust_min_max_ratio_pct:.2f}% "
                 f"(原始 {metrics.min_max_ratio_pct:.2f}%), "
@@ -144,10 +151,16 @@ class FlatfieldWorker(QObject):
                 f"Michelson={metrics.michelson_uniformity_pct:.2f}%"
             )
             self.log.emit(
+                f"[{suffix}] 九区: 四角对称={metrics.nine_zone_corner_symmetry_pct:.2f}%, "
+                f"中心最亮={metrics.nine_zone_center_to_max_pct:.2f}%, "
+                f"最暗格={metrics.nine_zone_min_to_max_pct:.2f}%, "
+                f"粗糙度={metrics.nine_zone_uniformity_pct:.2f}%"
+            )
+            self.log.emit(
                 f"[{suffix}] Min 位置 (row,col)={metrics.min_position}, "
                 f"Max 位置={metrics.max_position}"
             )
-            self.log.emit(f"[{suffix}] 判定: {reason}")
+            self.log.emit(f"[{suffix}] 判定: {verdict.reason}")
 
             self.stage_changed.emit(suffix, "生成示例对比")
             examples = build_examples(stack, flatfield, self._examples_per_channel)
@@ -170,8 +183,7 @@ class FlatfieldWorker(QObject):
                 flatfield_normalized=normalized,
                 metrics=metrics,
                 examples=examples,
-                passed=ok,
-                verdict_reason=reason,
+                verdict=verdict,
                 output_dir=out_dir,
             )
             self.channel_done.emit(result)

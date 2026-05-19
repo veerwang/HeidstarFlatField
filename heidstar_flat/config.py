@@ -29,8 +29,12 @@ class AppConfig:
     output_subdir: str = "flatfield_results"
     # 每通道 robust Min/Max (P1/P99) 阈值；发现到但未在 prefs 中的通道用此默认
     default_threshold: float = 30.0
-    # 全局 CV 均匀性阈值（双指标 AND 判定的第二项），所有通道共用
-    cv_threshold: float = 75.0
+    # 以下为全局阈值（所有通道共用），构成 6 项 AND 判定的其余 5 项
+    cv_threshold: float = 75.0                          # CV 均匀性 (1-σ/μ)
+    corner_symmetry_threshold: float = 70.0             # 四角对称: min_corner/max_corner
+    center_to_max_threshold: float = 95.0               # 中心最亮: center/max_zone
+    min_zone_to_max_threshold: float = 40.0             # 最暗格: min_zone/max_zone
+    nine_zone_uniformity_threshold: float = 75.0        # 九格粗糙度: 1-σ_zone/μ_zone
     image_subdir: str = "Images"
     image_glob: str = "IMG*.tif"
 
@@ -52,6 +56,18 @@ class AppConfig:
             output_subdir=data.get("output_subdir", "flatfield_results"),
             default_threshold=float(data.get("default_threshold", 30.0)),
             cv_threshold=float(data.get("cv_threshold", 75.0)),
+            corner_symmetry_threshold=float(
+                data.get("corner_symmetry_threshold", 70.0)
+            ),
+            center_to_max_threshold=float(
+                data.get("center_to_max_threshold", 95.0)
+            ),
+            min_zone_to_max_threshold=float(
+                data.get("min_zone_to_max_threshold", 40.0)
+            ),
+            nine_zone_uniformity_threshold=float(
+                data.get("nine_zone_uniformity_threshold", 75.0)
+            ),
             image_subdir=data.get("image_subdir", "Images"),
             image_glob=data.get("image_glob", "IMG*.tif"),
         )

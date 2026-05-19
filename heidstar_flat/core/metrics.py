@@ -1,10 +1,14 @@
-"""平场均匀性指标计算与示例图像生成。
+"""平场均匀性指标计算与判定。
 
-判定指标改造（按"稳健化 + 双指标 AND"原则）：
-- 主判定使用 **robust Min/Max** = P1 / P99，对单像素污点/坏点免疫
-- 第二判定使用 **CV 均匀性** (1 - σ/μ)，控制整体分散度
-- 同时记录 Min/Max 出现位置 (像素坐标)，便于在热力图上可视化
-- 原始 Min/Max、Michelson 仍计算并展示作为参考
+判定使用 6 项 AND 检查，每项独立阈值可配（统一约定"高 = 好，必须 ≥ 阈值"）：
+  1. ★ robust Min/Max  (P1 / P99)         — 抗污点的暗角幅度
+  2. ★ CV 均匀性       (1 − σ/μ)          — 整体分散度
+  3. 四角对称性        (min_corner / max_corner) — 抓装配倾斜 / 同心度偏移
+  4. 中心格最亮        (center / max_zone)  — 抓中心被遮挡
+  5. 最暗格阈值        (min_zone / max_zone) — ROI 平均后的衰减幅度
+  6. 九格粗糙度        (1 − σ_zone/μ_zone) — 大尺度结构均匀性
+
+也记录 Min/Max 像素位置，用于在热力图上区分"暗角" vs "中心异常"。
 """
 
 from __future__ import annotations
@@ -15,34 +19,43 @@ from typing import List, Tuple
 import numpy as np
 
 
+# ---------------- 数据模型 ----------------
+
 @dataclass
 class UniformityMetrics:
-    # 原始极值（含像素位置，用于可视化）
+    # 原始极值（含像素位置）
     minimum: float
     maximum: float
-    min_position: Tuple[int, int]            # (row, col) - 用于热力图上标注
+    min_position: Tuple[int, int]
     max_position: Tuple[int, int]
-    # 稳健极值（P1/P99，免疫单像素离群）
+    # 稳健极值
     p1: float
     p99: float
-    # 整体分布
+    # 整体统计
     mean: float
     std: float
     # 派生比值
-    min_max_ratio_pct: float                 # Min/Max × 100，参考
-    robust_min_max_ratio_pct: float          # ★ P1/P99 × 100，PASS/FAIL 主指标
-    michelson_uniformity_pct: float          # (1-(M-m)/(M+m)) × 100，参考
-    cv_uniformity_pct: float                 # ★ (1-σ/μ) × 100，PASS/FAIL 第二指标
-    # 空间结构
+    min_max_ratio_pct: float
+    robust_min_max_ratio_pct: float         # ★ 判定 #1
+    michelson_uniformity_pct: float
+    cv_uniformity_pct: float                # ★ 判定 #2
+    # 空间结构 (九区)
     center_corner_ratio: float
     nine_zone_means: List[float] = field(default_factory=list)
+    # 九区派生（★ 判定 #3–#6）
+    nine_zone_corner_symmetry_pct: float = 0.0
+    nine_zone_center_to_max_pct: float = 0.0
+    nine_zone_min_to_max_pct: float = 0.0
+    nine_zone_uniformity_pct: float = 0.0
 
     def as_table_rows(self) -> List[tuple]:
-        """返回 (指标名, 数值字符串) 列表，供 QTableWidget 直接展示。
-        判定指标用 ★ 标识；参考指标列其后。"""
         return [
             ("★ 稳健 Min/Max (判定)", f"{self.robust_min_max_ratio_pct:.2f} %"),
             ("★ CV 均匀性 (判定)", f"{self.cv_uniformity_pct:.2f} %"),
+            ("★ 九区 四角对称 (判定)", f"{self.nine_zone_corner_symmetry_pct:.2f} %"),
+            ("★ 九区 中心最亮 (判定)", f"{self.nine_zone_center_to_max_pct:.2f} %"),
+            ("★ 九区 最暗格 (判定)", f"{self.nine_zone_min_to_max_pct:.2f} %"),
+            ("★ 九区 粗糙度 (判定)", f"{self.nine_zone_uniformity_pct:.2f} %"),
             ("P1 / P99", f"{self.p1:.4f} / {self.p99:.4f}"),
             ("原始 Min / Max", f"{self.minimum:.4f} / {self.maximum:.4f}"),
             ("Min 位置 (row, col)", f"({self.min_position[0]}, {self.min_position[1]})"),
@@ -53,6 +66,47 @@ class UniformityMetrics:
             ("中心/四角比", f"{self.center_corner_ratio:.4f}"),
         ]
 
+
+@dataclass
+class VerdictThresholds:
+    """评判一个通道用到的全部阈值。"""
+    robust_min_max_pct: float
+    cv_pct: float
+    corner_symmetry_pct: float
+    center_to_max_pct: float
+    min_zone_to_max_pct: float
+    nine_zone_uniformity_pct: float
+
+
+@dataclass
+class VerdictCheck:
+    name: str
+    value_pct: float
+    threshold_pct: float
+    passed: bool
+
+
+@dataclass
+class VerdictResult:
+    passed: bool
+    checks: List[VerdictCheck]
+
+    @property
+    def reason(self) -> str:
+        if self.passed:
+            inner = " ; ".join(
+                f"{c.name} {c.value_pct:.2f}%" for c in self.checks
+            )
+            return f"PASS ({inner})"
+        fails = [c for c in self.checks if not c.passed]
+        inner = " ; ".join(
+            f"{c.name} {c.value_pct:.2f}% < {c.threshold_pct:.2f}%"
+            for c in fails
+        )
+        return f"FAIL ({inner})"
+
+
+# ---------------- 计算 ----------------
 
 def _normalize(flatfield: np.ndarray) -> np.ndarray:
     m = float(np.max(flatfield))
@@ -79,7 +133,7 @@ def _argmax_position(arr: np.ndarray) -> Tuple[int, int]:
 
 
 def compute_metrics(flatfield: np.ndarray) -> Tuple[np.ndarray, UniformityMetrics]:
-    """计算归一化平场和均匀性指标。返回 (normalized_flatfield, metrics)。"""
+    """计算归一化平场和均匀性指标。"""
     norm = _normalize(flatfield)
     h, w = norm.shape
 
@@ -89,20 +143,15 @@ def compute_metrics(flatfield: np.ndarray) -> Tuple[np.ndarray, UniformityMetric
     p99 = float(np.percentile(norm, 99))
     mean = float(np.mean(norm))
     std = float(np.std(norm))
-
     min_pos = _argmin_position(norm)
     max_pos = _argmax_position(norm)
 
-    if mx + mn > 0:
-        michelson = (1.0 - (mx - mn) / (mx + mn)) * 100.0
-    else:
-        michelson = 0.0
-
+    michelson = (1.0 - (mx - mn) / (mx + mn)) * 100.0 if mx + mn > 0 else 0.0
     cv = (1.0 - std / mean) * 100.0 if mean > 0 else 0.0
     min_max_ratio_pct = (mn / mx * 100.0) if mx > 0 else 0.0
     robust_min_max_ratio_pct = (p1 / p99 * 100.0) if p99 > 0 else 0.0
 
-    # 九区 ROI：行三等分、列三等分
+    # 九区 ROI
     rs = np.linspace(0, h, 4, dtype=int)
     cs = np.linspace(0, w, 4, dtype=int)
     zones: List[float] = []
@@ -114,6 +163,28 @@ def compute_metrics(flatfield: np.ndarray) -> Tuple[np.ndarray, UniformityMetric
     corners = [zones[0], zones[2], zones[6], zones[8]]
     corner_avg = float(np.mean([c for c in corners if np.isfinite(c)]))
     cc_ratio = center / corner_avg if corner_avg > 0 else float("nan")
+
+    # 九区派生
+    zones_arr = np.asarray(zones, dtype=np.float64)
+    nz_mean = float(np.mean(zones_arr))
+    nz_std = float(np.std(zones_arr))
+    nz_max = float(np.max(zones_arr))
+    nz_min = float(np.min(zones_arr))
+    corner_max = float(max(corners))
+    corner_min = float(min(corners))
+
+    nine_zone_corner_symmetry_pct = (
+        corner_min / corner_max * 100.0 if corner_max > 0 else 0.0
+    )
+    nine_zone_center_to_max_pct = (
+        center / nz_max * 100.0 if nz_max > 0 else 0.0
+    )
+    nine_zone_min_to_max_pct = (
+        nz_min / nz_max * 100.0 if nz_max > 0 else 0.0
+    )
+    nine_zone_uniformity_pct = (
+        (1.0 - nz_std / nz_mean) * 100.0 if nz_mean > 0 else 0.0
+    )
 
     metrics = UniformityMetrics(
         minimum=mn,
@@ -130,45 +201,41 @@ def compute_metrics(flatfield: np.ndarray) -> Tuple[np.ndarray, UniformityMetric
         cv_uniformity_pct=cv,
         center_corner_ratio=cc_ratio,
         nine_zone_means=zones,
+        nine_zone_corner_symmetry_pct=nine_zone_corner_symmetry_pct,
+        nine_zone_center_to_max_pct=nine_zone_center_to_max_pct,
+        nine_zone_min_to_max_pct=nine_zone_min_to_max_pct,
+        nine_zone_uniformity_pct=nine_zone_uniformity_pct,
     )
     return norm, metrics
 
 
+# ---------------- 判定 ----------------
+
 def evaluate_verdict(
-    metrics: UniformityMetrics,
-    robust_threshold_pct: float,
-    cv_threshold_pct: float,
-) -> Tuple[bool, str]:
-    """双指标 AND 判定。
-
-    Returns:
-        (passed, reason)
-        - passed: 两个判定指标同时达标
-        - reason: 人类可读的描述（PASS 时给数值摘要；FAIL 时列出失败项）
-    """
-    rmm = metrics.robust_min_max_ratio_pct
-    cv = metrics.cv_uniformity_pct
-    rmm_ok = rmm >= robust_threshold_pct
-    cv_ok = cv >= cv_threshold_pct
-
-    if rmm_ok and cv_ok:
-        return True, (
-            f"PASS (Min/Max {rmm:.2f}% ≥ {robust_threshold_pct:.2f}%, "
-            f"CV {cv:.2f}% ≥ {cv_threshold_pct:.2f}%)"
-        )
-
-    fails = []
-    if not rmm_ok:
-        fails.append(f"Min/Max {rmm:.2f}% < {robust_threshold_pct:.2f}%")
-    if not cv_ok:
-        fails.append(f"CV {cv:.2f}% < {cv_threshold_pct:.2f}%")
-    return False, "FAIL (" + " ; ".join(fails) + ")"
+    metrics: UniformityMetrics, thr: VerdictThresholds
+) -> VerdictResult:
+    """6 项 AND 判定。返回结构化结果（含每项 pass/fail）。"""
+    items = [
+        ("Min/Max", metrics.robust_min_max_ratio_pct, thr.robust_min_max_pct),
+        ("CV", metrics.cv_uniformity_pct, thr.cv_pct),
+        ("四角对称", metrics.nine_zone_corner_symmetry_pct, thr.corner_symmetry_pct),
+        ("中心最亮", metrics.nine_zone_center_to_max_pct, thr.center_to_max_pct),
+        ("最暗格", metrics.nine_zone_min_to_max_pct, thr.min_zone_to_max_pct),
+        ("九格粗糙度", metrics.nine_zone_uniformity_pct, thr.nine_zone_uniformity_pct),
+    ]
+    checks = [
+        VerdictCheck(name=n, value_pct=float(v), threshold_pct=float(t), passed=v >= t)
+        for n, v, t in items
+    ]
+    return VerdictResult(passed=all(c.passed for c in checks), checks=checks)
 
 
-# 旧名兼容：仍可按主指标做单项判定（PDF/report 内部还在用），但建议改用 evaluate_verdict
+# 旧 API 兼容（PDF/老代码）：单项主指标判定
 def passes_threshold(metrics: UniformityMetrics, threshold_pct: float) -> bool:
     return metrics.robust_min_max_ratio_pct >= threshold_pct
 
+
+# ---------------- 示例三联画 ----------------
 
 @dataclass
 class ExampleTriplet:

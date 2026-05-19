@@ -48,6 +48,30 @@ class SettingsDialog(QDialog):
         self.cv_thr_spin.setValue(cfg.cv_threshold)
         form.addRow("全局 CV 均匀性阈值 (%)", self.cv_thr_spin)
 
+        self.corner_sym_spin = QDoubleSpinBox()
+        self.corner_sym_spin.setRange(0.0, 100.0)
+        self.corner_sym_spin.setDecimals(2)
+        self.corner_sym_spin.setValue(cfg.corner_symmetry_threshold)
+        form.addRow("九区 四角对称阈值 (%)", self.corner_sym_spin)
+
+        self.center_max_spin = QDoubleSpinBox()
+        self.center_max_spin.setRange(0.0, 100.0)
+        self.center_max_spin.setDecimals(2)
+        self.center_max_spin.setValue(cfg.center_to_max_threshold)
+        form.addRow("九区 中心最亮阈值 (%)", self.center_max_spin)
+
+        self.min_zone_spin = QDoubleSpinBox()
+        self.min_zone_spin.setRange(0.0, 100.0)
+        self.min_zone_spin.setDecimals(2)
+        self.min_zone_spin.setValue(cfg.min_zone_to_max_threshold)
+        form.addRow("九区 最暗格阈值 (%)", self.min_zone_spin)
+
+        self.nz_unif_spin = QDoubleSpinBox()
+        self.nz_unif_spin.setRange(0.0, 100.0)
+        self.nz_unif_spin.setDecimals(2)
+        self.nz_unif_spin.setValue(cfg.nine_zone_uniformity_threshold)
+        form.addRow("九区 粗糙度阈值 (%)", self.nz_unif_spin)
+
         self.output_subdir_edit = QLineEdit(cfg.output_subdir)
         form.addRow("输出子目录名", self.output_subdir_edit)
 
@@ -128,6 +152,10 @@ class SettingsDialog(QDialog):
             output_subdir=self.output_subdir_edit.text().strip() or "flatfield_results",
             default_threshold=float(self.default_thr_spin.value()),
             cv_threshold=float(self.cv_thr_spin.value()),
+            corner_symmetry_threshold=float(self.corner_sym_spin.value()),
+            center_to_max_threshold=float(self.center_max_spin.value()),
+            min_zone_to_max_threshold=float(self.min_zone_spin.value()),
+            nine_zone_uniformity_threshold=float(self.nz_unif_spin.value()),
             image_subdir=self.image_subdir_edit.text().strip() or "Images",
             image_glob=self.image_glob_edit.text().strip() or "IMG*.tif",
         )

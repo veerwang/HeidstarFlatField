@@ -151,21 +151,22 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
             transform=ax.transAxes)
 
     headers = ["通道", "Fluo", "瓦片",
-               "阈值 Min/Max", "阈值 CV",
-               "robust Min/Max (%)", "CV (%)",
-               "原始 Min/Max (%)", "判定"]
+               "Min/Max", "CV", "四角对称", "中心", "最暗格", "九格粗糙",
+               "判定"]
     rows = []
     for r in results:
         fluo = r.job.discovered.fluo_name or "—"
+        m = r.metrics
         rows.append([
             r.job.display_name,
             fluo,
             str(r.num_images),
-            f"{r.job.threshold:.1f}",
-            f"{r.job.cv_threshold:.1f}",
-            f"{r.metrics.robust_min_max_ratio_pct:.2f}",
-            f"{r.metrics.cv_uniformity_pct:.2f}",
-            f"{r.metrics.min_max_ratio_pct:.2f}",
+            f"{m.robust_min_max_ratio_pct:.1f}",
+            f"{m.cv_uniformity_pct:.1f}",
+            f"{m.nine_zone_corner_symmetry_pct:.1f}",
+            f"{m.nine_zone_center_to_max_pct:.1f}",
+            f"{m.nine_zone_min_to_max_pct:.1f}",
+            f"{m.nine_zone_uniformity_pct:.1f}",
             _verdict_text(r.passed),
         ])
 
@@ -177,13 +178,18 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
         loc="upper left", cellLoc="center",
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(8.5)
+    table.set_fontsize(8.0)
     table.scale(1, 1.7)
-    # 染色：判定列
+    # 染色：判定列；每个数值单元格按 PASS/FAIL 着色（对应该项的对比阈值）
     for i, r in enumerate(results, 1):
         cell = table[(i, len(headers) - 1)]
         cell.set_facecolor(_verdict_color(r.passed))
         cell.set_text_props(color="white", fontweight="bold")
+        # 染色 6 个指标数值列：3..8（headers 索引）
+        check_pass = [c.passed for c in r.verdict.checks]
+        for col, ok in zip(range(3, 3 + len(check_pass)), check_pass):
+            cell = table[(i, col)]
+            cell.set_facecolor("#e8f4ec" if ok else "#fbe2e2")
     # 表头加粗
     for j in range(len(headers)):
         table[(0, j)].set_facecolor("#dde4ea")
@@ -244,19 +250,22 @@ def _build_overview(result):
     meta_line = (
         f"Fluo: {fluo}    曝光: {expo}    增益: {gain}    "
         f"瓦片: {result.num_images}    网格: {grid}    "
-        f"判定: Min/Max ≥ {result.job.threshold:.2f}% ∧ CV ≥ {result.job.cv_threshold:.2f}%"
+        f"判定: 6 项 AND"
     )
     ax_hdr.text(
-        0, 0.32, meta_line,
+        0, 0.30, meta_line,
         fontsize=10, color="#444",
         transform=ax_hdr.transAxes,
     )
-    reason = getattr(result, "verdict_reason", "") or ""
-    if reason:
+    # 6 项检查行内列出（用 ✓/✗ 紧凑显示）
+    if getattr(result, "verdict", None) and result.verdict.checks:
+        bits = []
+        for c in result.verdict.checks:
+            mark = "✓" if c.passed else "✗"
+            bits.append(f"{mark} {c.name} {c.value_pct:.1f}%/{c.threshold_pct:.1f}%")
         ax_hdr.text(
-            0, 0.05, reason,
-            fontsize=9.5, color=_verdict_color(result.passed),
-            fontweight="bold",
+            0, 0.04, "   ".join(bits),
+            fontsize=8.5, color="#222",
             transform=ax_hdr.transAxes,
         )
 

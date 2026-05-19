@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
 )
 
 from heidstar_flat.core.loader import DiscoveredChannel
+from heidstar_flat.core.metrics import VerdictThresholds
 from heidstar_flat.ui.gallery import GalleryView
 from heidstar_flat.ui.metrics_table import MetricsPanel
 from heidstar_flat.ui.mpl_canvas import HeatmapCanvas
@@ -104,10 +105,24 @@ def _fmt_elapsed(seconds: float) -> str:
     return f"{mm}:{ss:02d}"
 
 
-def _fmt_threshold_label(rmm_thr: float, cv_thr: float) -> str:
+def _fmt_threshold_label(thr: VerdictThresholds) -> str:
     return (
-        f"<span style='font-size:13pt'>判定: "
-        f"Min/Max ≥ {rmm_thr:.2f}%  ∧  CV ≥ {cv_thr:.2f}%</span>"
+        f"<span style='font-size:13pt'>"
+        f"判定: 6 项 AND  "
+        f"<span style='color:#666'>(详见下方)</span>"
+        f"</span>"
+    )
+
+
+def _threshold_tooltip(thr: VerdictThresholds) -> str:
+    return (
+        "6 项 AND 判定阈值：\n"
+        f"① Min/Max (P1/P99)     ≥ {thr.robust_min_max_pct:.2f}%\n"
+        f"② CV 均匀性 (1-σ/μ)    ≥ {thr.cv_pct:.2f}%\n"
+        f"③ 九区 四角对称         ≥ {thr.corner_symmetry_pct:.2f}%\n"
+        f"④ 九区 中心最亮         ≥ {thr.center_to_max_pct:.2f}%\n"
+        f"⑤ 九区 最暗格           ≥ {thr.min_zone_to_max_pct:.2f}%\n"
+        f"⑥ 九区 粗糙度           ≥ {thr.nine_zone_uniformity_pct:.2f}%"
     )
 
 
@@ -116,13 +131,13 @@ class ChannelTab(QWidget):
         self,
         suffix: str,
         display_name: str,
-        threshold: float,
-        cv_threshold: float = 75.0,
+        thresholds: VerdictThresholds,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.suffix = suffix
         self.display_name = display_name
+        self._thresholds = thresholds
 
         # 状态机字段
         self._active_stage: Optional[str] = None
@@ -143,16 +158,18 @@ class ChannelTab(QWidget):
         self.badge = VerdictBadge()
         header.addWidget(self.badge)
         header.addStretch(1)
-        self.threshold_label = QLabel(_fmt_threshold_label(threshold, cv_threshold))
+        self.threshold_label = QLabel(_fmt_threshold_label(thresholds))
         self.threshold_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.threshold_label.setToolTip(_threshold_tooltip(thresholds))
         header.addWidget(self.threshold_label)
         root.addLayout(header)
 
-        # 判定原因（PASS/FAIL 摘要），运行前隐藏
+        # 判定原因（按 6 项 check 渲染绿/红列表）
         self.reason_label = QLabel("")
+        self.reason_label.setTextFormat(Qt.RichText)
         self.reason_label.setWordWrap(True)
         self.reason_label.setStyleSheet(
-            "QLabel { color: #444; font-size: 11pt; padding: 2px 6px; }"
+            "QLabel { padding: 4px 6px; }"
         )
         self.reason_label.setVisible(False)
         root.addWidget(self.reason_label)
@@ -232,8 +249,10 @@ class ChannelTab(QWidget):
             )
 
     # —— 状态切换 ——
-    def reset(self, threshold: float, cv_threshold: float = 75.0) -> None:
-        self.threshold_label.setText(_fmt_threshold_label(threshold, cv_threshold))
+    def reset(self, thresholds: VerdictThresholds) -> None:
+        self._thresholds = thresholds
+        self.threshold_label.setText(_fmt_threshold_label(thresholds))
+        self.threshold_label.setToolTip(_threshold_tooltip(thresholds))
         self.reason_label.setVisible(False)
         self.reason_label.setText("")
         self._active_stage = None
@@ -287,15 +306,27 @@ class ChannelTab(QWidget):
         )
         self.metrics_panel.show_metrics(result.metrics)
         self.gallery.show_examples(result.examples)
-        # 判定原因（用于辨别失败模式）
-        reason = getattr(result, "verdict_reason", "")
-        if reason:
-            color = "#2ea043" if result.passed else "#cf222e"
-            self.reason_label.setStyleSheet(
-                f"QLabel {{ color: {color}; font-size: 11pt; padding: 2px 6px; }}"
+
+        # 把 6 项检查渲染成 HTML 列表（绿 ✓ / 红 ✗）
+        checks = getattr(result.verdict, "checks", None)
+        if checks:
+            parts = []
+            for c in checks:
+                color = "#2ea043" if c.passed else "#cf222e"
+                glyph = "✓" if c.passed else "✗"
+                op = "≥" if c.passed else "&lt;"
+                parts.append(
+                    f"<span style='color:{color}; font-weight:bold'>{glyph} {c.name}</span> "
+                    f"<span style='color:#333'>{c.value_pct:.2f}% {op} {c.threshold_pct:.2f}%</span>"
+                )
+            verdict_color = "#2ea043" if result.passed else "#cf222e"
+            head = (
+                f"<span style='color:{verdict_color}; font-size:12pt; font-weight:bold'>"
+                f"{'PASS' if result.passed else 'FAIL'}</span> &nbsp; "
             )
-            self.reason_label.setText(reason)
+            self.reason_label.setText(head + " &nbsp;·&nbsp; ".join(parts))
             self.reason_label.setVisible(True)
+
         if result.passed:
             self.badge.set_ok()
         else:
