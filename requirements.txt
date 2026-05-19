@@ -1,0 +1,6 @@
+numpy>=1.23
+matplotlib>=3.6
+tifffile>=2022.5.4
+scikit-image>=0.19
+basicpy>=1.0.0
+PyQt5>=5.15

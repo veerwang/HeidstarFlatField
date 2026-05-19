@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtualenv
+.venv/
+venv/
+env/
+ENV/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# matplotlib / jupyter
+.ipynb_checkpoints/
+
+# 运行产物
+flatfield_results/
+flatfield_results_*nm/
+/tmp_*
+
+# 用户本地配置（如果有人不小心把全局配置 copy 进项目）
+config.local.json
+
+# Claude / 工具产物（保留 .claude/settings.local.json 视项目惯例而定，这里默认忽略本地覆盖）
+.claude/settings.local.json
