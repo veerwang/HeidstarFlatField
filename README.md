@@ -12,10 +12,11 @@
 - 每通道页头部展示 Scan.txt 元数据：荧光名 (DAPI/PVB480/…)、颜色色块、曝光、增益、瓦片数、网格、位深
 - 每通道结果页：
   - 归一化平场热力图 + 强度分布直方图 + 中心十字断面
-  - 均匀性指标：Min/Max/Mean/Std、Michelson 均匀性 (%)、CV 均匀性、中心/四角比、九区 ROI 表
+  - 均匀性指标：Min/Max/Mean/Std、★ Min/Max ratio (判定指标)、Michelson 均匀性、CV 均匀性、中心/四角比、九区 ROI 表
   - 示例画廊：原图 / 校正后 / 差异 三联画
-  - PASS / FAIL 徽章（按 Michelson 阈值判定，每通道阈值可配并持久化）
+  - PASS / FAIL 徽章（按 **Min/Max ratio** 阈值判定，每通道阈值可配并持久化）
 - 计算运行在 QThread 子线程，UI 不阻塞，可中途停止
+- **导出 PDF 报告**：一键生成包含封面汇总表 + 每通道概览页 + 全部示例三联画的整合 PDF
 
 ## 数据约定
 

@@ -30,8 +30,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from datetime import datetime
+
 from heidstar_flat.config import AppConfig, load_config, save_config
 from heidstar_flat.core.loader import DiscoveredChannel, discover_channels
+from heidstar_flat.core.report import generate_pdf_report
 from heidstar_flat.ui.channel_tab import ChannelTab
 from heidstar_flat.ui.settings_dialog import SettingsDialog
 from heidstar_flat.worker import (
@@ -55,6 +58,9 @@ class MainWindow(QMainWindow):
         self._discovered: List[DiscoveredChannel] = []
         self._tabs_by_suffix: Dict[str, ChannelTab] = {}
         self._channel_checks: Dict[str, QCheckBox] = {}
+        # 已完成通道的结果，按通道发现顺序累积；用于 PDF 导出
+        self._results: List[ChannelResult] = []
+        self._last_output_dir: str = ""
 
         # 秒表：运行中每秒刷新一次 badge 的 elapsed
         self._tick_timer = QTimer(self)
@@ -120,8 +126,13 @@ class MainWindow(QMainWindow):
         self.stop_btn = QPushButton("停止")
         self.stop_btn.clicked.connect(self._on_stop)
         self.stop_btn.setEnabled(False)
+        self.export_btn = QPushButton("导出 PDF 报告")
+        self.export_btn.clicked.connect(self._on_export_pdf)
+        self.export_btn.setEnabled(False)
+        self.export_btn.setToolTip("至少需要完成一个通道才能导出。")
         ctrl_layout.addWidget(self.start_btn)
         ctrl_layout.addWidget(self.stop_btn)
+        ctrl_layout.addWidget(self.export_btn)
         left_layout.addWidget(ctrl_box)
 
         mid_splitter.addWidget(left)
@@ -312,6 +323,11 @@ class MainWindow(QMainWindow):
             output_dir = str(Path(root) / self.cfg.output_subdir)
             self.output_edit.setText(output_dir)
 
+        # 清空上一轮结果，开始新一轮收集；新一轮跑完前禁用导出
+        self._results.clear()
+        self._last_output_dir = output_dir
+        self.export_btn.setEnabled(False)
+
         total = len(jobs)
         for i, j in enumerate(jobs, 1):
             tab = self._tabs_by_suffix.get(j.suffix)
@@ -383,6 +399,8 @@ class MainWindow(QMainWindow):
         tab = self._tabs_by_suffix.get(result.suffix)
         if tab is not None:
             tab.on_result(result)
+        self._results.append(result)
+        self.export_btn.setEnabled(True)
         self.progress.setRange(0, 0)
 
     def _on_channel_failed(self, suffix: str, msg: str) -> None:
@@ -397,6 +415,59 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.statusBar().showMessage("全部完成")
         self._append_log("====== 全部通道处理结束 ======")
+
+    # ---------- PDF 导出 ----------
+    def _on_export_pdf(self) -> None:
+        if not self._results:
+            QMessageBox.information(self, "提示", "尚无已完成的通道结果，无法导出。")
+            return
+
+        default_dir = self._last_output_dir or self.output_edit.text().strip() or "."
+        default_name = (
+            f"flatfield_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        )
+        default_path = str(Path(default_dir) / default_name)
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出 PDF 报告", default_path, "PDF 文件 (*.pdf)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
+            path += ".pdf"
+
+        # 禁用按钮，避免重复点击；状态栏进度
+        self.export_btn.setEnabled(False)
+        self.start_btn.setEnabled(False)
+        self._append_log(f"开始导出 PDF 报告 → {path}")
+
+        from PyQt5.QtWidgets import QApplication
+
+        def on_progress(label: str, cur: int, total: int) -> None:
+            self.statusBar().showMessage(f"导出 PDF — {label} ({cur}/{total})")
+            # 把控制权让回事件循环，避免界面"假死"
+            QApplication.processEvents()
+
+        try:
+            scan_root = self.input_edit.text().strip()
+            generate_pdf_report(
+                results=self._results,
+                output_path=path,
+                scan_root=scan_root,
+                output_dir=self._last_output_dir or "",
+                progress_fn=on_progress,
+            )
+        except Exception as e:
+            self._append_log(f"导出失败: {e}")
+            QMessageBox.warning(self, "导出失败", f"PDF 导出过程中出错:\n{e}")
+            self.statusBar().showMessage("导出失败")
+        else:
+            self._append_log(f"PDF 报告已生成: {path}")
+            self.statusBar().showMessage(f"PDF 已生成: {path}")
+            QMessageBox.information(self, "导出完成", f"PDF 报告已保存到:\n{path}")
+        finally:
+            self.export_btn.setEnabled(True)
+            self.start_btn.setEnabled(True)
 
     def _cleanup_thread(self) -> None:
         if self._thread is not None:
