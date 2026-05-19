@@ -141,10 +141,14 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
         font = QFont("Monospace")
         font.setStyleHint(QFont.TypeWriter)
+        font.setPointSize(10)
         self.log_view.setFont(font)
+        # 控件高度上限 ≈ 之前 4:1 拉伸下的一半（用绝对值更稳）
+        self.log_view.setMaximumHeight(140)
         log_layout.addWidget(self.log_view)
         right_split.addWidget(log_box)
-        right_split.setStretchFactor(0, 4)
+        # 把垂直拉伸从 4:1 调到 9:1，配合 maximumHeight 一起把日志压到一半
+        right_split.setStretchFactor(0, 9)
         right_split.setStretchFactor(1, 1)
 
         mid_splitter.addWidget(right_split)

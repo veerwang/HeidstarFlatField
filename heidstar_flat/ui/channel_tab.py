@@ -37,15 +37,15 @@ class VerdictBadge(QLabel):
     def __init__(self, parent=None) -> None:
         super().__init__("待开始", parent)
         self.setAlignment(Qt.AlignCenter)
-        self.setFixedHeight(36)
-        self.setMinimumWidth(160)
+        self.setFixedHeight(44)
+        self.setMinimumWidth(220)
         self._apply_style("#888888", "#ffffff")
 
     def _apply_style(self, bg: str, fg: str) -> None:
         self.setStyleSheet(
             f"QLabel {{ background-color: {bg}; color: {fg}; "
-            f"font-weight: bold; font-size: 14px; border-radius: 4px; "
-            f"padding: 4px 12px; }}"
+            f"font-weight: bold; font-size: 16pt; border-radius: 5px; "
+            f"padding: 4px 14px; }}"
         )
 
     def set_idle(self) -> None:
@@ -76,7 +76,7 @@ class VerdictBadge(QLabel):
 class ColorSwatch(QLabel):
     def __init__(self, hex_color: Optional[str] = None, parent=None) -> None:
         super().__init__(parent)
-        self.setFixedSize(20, 20)
+        self.setFixedSize(26, 26)
         self.set_color(hex_color)
 
     def set_color(self, hex_color: Optional[str]) -> None:
@@ -121,13 +121,17 @@ class ChannelTab(QWidget):
         header = QHBoxLayout()
         self.swatch = ColorSwatch(None)
         header.addWidget(self.swatch)
-        self.name_label = QLabel(f"<b>{display_name}</b>")
+        self.name_label = QLabel(
+            f"<span style='font-size:18pt; font-weight:bold'>{display_name}</span>"
+        )
         header.addWidget(self.name_label)
         header.addSpacing(12)
         self.badge = VerdictBadge()
         header.addWidget(self.badge)
         header.addStretch(1)
-        self.threshold_label = QLabel(f"阈值 (Min/Max) ≥ {threshold:.2f}%")
+        self.threshold_label = QLabel(
+            f"<span style='font-size:13pt'>阈值 (Min/Max) ≥ {threshold:.2f}%</span>"
+        )
         self.threshold_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         header.addWidget(self.threshold_label)
         root.addLayout(header)
@@ -139,8 +143,8 @@ class ChannelTab(QWidget):
         meta_grid.setHorizontalSpacing(18)
         self._meta_value_labels: dict[str, QLabel] = {}
         for col, key in enumerate(["荧光", "曝光", "增益", "瓦片", "网格", "位深"]):
-            k = QLabel(f"<span style='color:#666'>{key}</span>")
-            v = QLabel("—")
+            k = QLabel(f"<span style='color:#666; font-size:12pt'>{key}</span>")
+            v = QLabel("<span style='font-size:12pt'>—</span>")
             v.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
             meta_grid.addWidget(k, 0, col * 2)
             meta_grid.addWidget(v, 0, col * 2 + 1)
@@ -181,15 +185,18 @@ class ChannelTab(QWidget):
             if ch.grid_rows and ch.grid_cols
             else "—"
         )
-        self._meta_value_labels["荧光"].setText(ch.fluo_name or "—")
-        self._meta_value_labels["曝光"].setText(_fmt_exposure(ch.exposure_us))
+        def _v(text: str) -> str:
+            return f"<span style='font-size:12pt'>{text}</span>"
+
+        self._meta_value_labels["荧光"].setText(_v(ch.fluo_name or "—"))
+        self._meta_value_labels["曝光"].setText(_v(_fmt_exposure(ch.exposure_us)))
         self._meta_value_labels["增益"].setText(
-            str(ch.gain) if ch.gain is not None else "—"
+            _v(str(ch.gain) if ch.gain is not None else "—")
         )
-        self._meta_value_labels["瓦片"].setText(str(ch.num_tiles))
-        self._meta_value_labels["网格"].setText(grid)
+        self._meta_value_labels["瓦片"].setText(_v(str(ch.num_tiles)))
+        self._meta_value_labels["网格"].setText(_v(grid))
         self._meta_value_labels["位深"].setText(
-            f"{ch.pixel_bits}-bit" if ch.pixel_bits else "—"
+            _v(f"{ch.pixel_bits}-bit" if ch.pixel_bits else "—")
         )
 
         if ch.preview_path is not None:
@@ -205,7 +212,9 @@ class ChannelTab(QWidget):
 
     # —— 状态切换 ——
     def reset(self, threshold: float) -> None:
-        self.threshold_label.setText(f"阈值 (Min/Max) ≥ {threshold:.2f}%")
+        self.threshold_label.setText(
+            f"<span style='font-size:13pt'>阈值 (Min/Max) ≥ {threshold:.2f}%</span>"
+        )
         self._active_stage = None
         self._stage_start = None
         self._loading_cur = 0

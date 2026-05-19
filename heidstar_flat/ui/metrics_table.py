@@ -17,21 +17,31 @@ from PyQt5.QtWidgets import (
 from heidstar_flat.core.metrics import UniformityMetrics
 
 
+_SECTION_STYLE = "QLabel { font-size: 13pt; font-weight: bold; padding-top: 4px; }"
+_TABLE_STYLE = "QTableWidget { font-size: 12pt; }"
+
+
 class MetricsPanel(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
 
-        layout.addWidget(QLabel("均匀性指标"))
+        lbl1 = QLabel("均匀性指标")
+        lbl1.setStyleSheet(_SECTION_STYLE)
+        layout.addWidget(lbl1)
         self.table = QTableWidget(0, 2, self)
         self.table.setHorizontalHeaderLabels(["指标", "数值"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.NoSelection)
+        self.table.setStyleSheet(_TABLE_STYLE)
+        self.table.verticalHeader().setDefaultSectionSize(28)
         layout.addWidget(self.table)
 
-        layout.addWidget(QLabel("九区 ROI 均值 (归一化平场)"))
+        lbl2 = QLabel("九区 ROI 均值 (归一化平场)")
+        lbl2.setStyleSheet(_SECTION_STYLE)
+        layout.addWidget(lbl2)
         self.zone_table = QTableWidget(3, 3, self)
         self.zone_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.zone_table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -39,6 +49,7 @@ class MetricsPanel(QWidget):
         self.zone_table.verticalHeader().setVisible(False)
         self.zone_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.zone_table.setSelectionMode(QTableWidget.NoSelection)
+        self.zone_table.setStyleSheet(_TABLE_STYLE)
         layout.addWidget(self.zone_table)
 
     def show_metrics(self, metrics: UniformityMetrics) -> None:

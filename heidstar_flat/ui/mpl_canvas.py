@@ -60,6 +60,19 @@ else:
         file=sys.stderr,
     )
 
+# 全局放大画布内字号（标题/坐标/刻度/图例/figure 标题）
+matplotlib.rcParams.update(
+    {
+        "font.size": 12,
+        "axes.titlesize": 14,
+        "axes.labelsize": 13,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 11,
+        "figure.titlesize": 15,
+    }
+)
+
 
 from matplotlib.backends.backend_qt5agg import (  # noqa: E402
     FigureCanvasQTAgg,
