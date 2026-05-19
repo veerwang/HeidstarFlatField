@@ -22,17 +22,18 @@ from heidstar_flat.core.metrics import (
     UniformityMetrics,
     build_examples,
     compute_metrics,
-    passes_threshold,
+    evaluate_verdict,
 )
 
 
 @dataclass
 class ChannelJob:
-    """一个待处理通道：发现结果 + 用户阈值/显示名。"""
+    """一个待处理通道：发现结果 + 阈值 + 显示名。"""
 
     discovered: DiscoveredChannel
     display_name: str
-    threshold: float
+    threshold: float        # 主指标 (robust Min/Max P1/P99) 阈值
+    cv_threshold: float     # 第二指标 (CV) 阈值
 
     @property
     def suffix(self) -> str:
@@ -47,6 +48,7 @@ class ChannelResult:
     metrics: UniformityMetrics
     examples: List[ExampleTriplet]
     passed: bool
+    verdict_reason: str          # 判定原因（PASS 摘要 / FAIL 列出失败项）
     output_dir: Path
 
     @property
@@ -132,13 +134,20 @@ class FlatfieldWorker(QObject):
 
             self.stage_changed.emit(suffix, "计算均匀性指标")
             normalized, metrics = compute_metrics(flatfield)
-            ok = passes_threshold(metrics, job.threshold)
-            self.log.emit(
-                f"[{suffix}] Min/Max={metrics.min_max_ratio_pct:.2f}% "
-                f"(Michelson={metrics.michelson_uniformity_pct:.2f}%, "
-                f"CV={metrics.cv_uniformity_pct:.2f}%) "
-                f"阈值={job.threshold:.2f}% -> {'PASS' if ok else 'FAIL'}"
+            ok, reason = evaluate_verdict(
+                metrics, job.threshold, job.cv_threshold
             )
+            self.log.emit(
+                f"[{suffix}] robust Min/Max={metrics.robust_min_max_ratio_pct:.2f}% "
+                f"(原始 {metrics.min_max_ratio_pct:.2f}%), "
+                f"CV={metrics.cv_uniformity_pct:.2f}%, "
+                f"Michelson={metrics.michelson_uniformity_pct:.2f}%"
+            )
+            self.log.emit(
+                f"[{suffix}] Min 位置 (row,col)={metrics.min_position}, "
+                f"Max 位置={metrics.max_position}"
+            )
+            self.log.emit(f"[{suffix}] 判定: {reason}")
 
             self.stage_changed.emit(suffix, "生成示例对比")
             examples = build_examples(stack, flatfield, self._examples_per_channel)
@@ -162,6 +171,7 @@ class FlatfieldWorker(QObject):
                 metrics=metrics,
                 examples=examples,
                 passed=ok,
+                verdict_reason=reason,
                 output_dir=out_dir,
             )
             self.channel_done.emit(result)

@@ -245,7 +245,11 @@ class MainWindow(QMainWindow):
         for ch in self._discovered:
             pref = self.cfg.pref_for(ch.suffix)
             display = pref.display_name or ch.display_name
-            tab = ChannelTab(ch.suffix, display, pref.uniformity_threshold)
+            tab = ChannelTab(
+                ch.suffix, display,
+                pref.uniformity_threshold,
+                self.cfg.cv_threshold,
+            )
             tab.update_from_discovery(ch)
             self.tabs.addTab(tab, display)
             self._tabs_by_suffix[ch.suffix] = tab
@@ -300,6 +304,7 @@ class MainWindow(QMainWindow):
                     discovered=ch,
                     display_name=display,
                     threshold=pref.uniformity_threshold,
+                    cv_threshold=self.cfg.cv_threshold,
                 )
             )
         return jobs
@@ -332,7 +337,7 @@ class MainWindow(QMainWindow):
         for i, j in enumerate(jobs, 1):
             tab = self._tabs_by_suffix.get(j.suffix)
             if tab is not None:
-                tab.reset(j.threshold)
+                tab.reset(j.threshold, j.cv_threshold)
                 tab.set_queue_position(i, total)
 
         self.log_view.clear()

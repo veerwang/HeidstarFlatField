@@ -40,7 +40,13 @@ class SettingsDialog(QDialog):
         self.default_thr_spin.setRange(0.0, 100.0)
         self.default_thr_spin.setDecimals(2)
         self.default_thr_spin.setValue(cfg.default_threshold)
-        form.addRow("默认 Min/Max 阈值 (%)", self.default_thr_spin)
+        form.addRow("默认 robust Min/Max 阈值 (%)", self.default_thr_spin)
+
+        self.cv_thr_spin = QDoubleSpinBox()
+        self.cv_thr_spin.setRange(0.0, 100.0)
+        self.cv_thr_spin.setDecimals(2)
+        self.cv_thr_spin.setValue(cfg.cv_threshold)
+        form.addRow("全局 CV 均匀性阈值 (%)", self.cv_thr_spin)
 
         self.output_subdir_edit = QLineEdit(cfg.output_subdir)
         form.addRow("输出子目录名", self.output_subdir_edit)
@@ -121,6 +127,7 @@ class SettingsDialog(QDialog):
             examples_per_channel=int(self.examples_spin.value()),
             output_subdir=self.output_subdir_edit.text().strip() or "flatfield_results",
             default_threshold=float(self.default_thr_spin.value()),
+            cv_threshold=float(self.cv_thr_spin.value()),
             image_subdir=self.image_subdir_edit.text().strip() or "Images",
             image_glob=self.image_glob_edit.text().strip() or "IMG*.tif",
         )

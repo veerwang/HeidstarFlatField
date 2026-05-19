@@ -104,8 +104,22 @@ def _fmt_elapsed(seconds: float) -> str:
     return f"{mm}:{ss:02d}"
 
 
+def _fmt_threshold_label(rmm_thr: float, cv_thr: float) -> str:
+    return (
+        f"<span style='font-size:13pt'>判定: "
+        f"Min/Max ≥ {rmm_thr:.2f}%  ∧  CV ≥ {cv_thr:.2f}%</span>"
+    )
+
+
 class ChannelTab(QWidget):
-    def __init__(self, suffix: str, display_name: str, threshold: float, parent=None) -> None:
+    def __init__(
+        self,
+        suffix: str,
+        display_name: str,
+        threshold: float,
+        cv_threshold: float = 75.0,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.suffix = suffix
         self.display_name = display_name
@@ -129,12 +143,19 @@ class ChannelTab(QWidget):
         self.badge = VerdictBadge()
         header.addWidget(self.badge)
         header.addStretch(1)
-        self.threshold_label = QLabel(
-            f"<span style='font-size:13pt'>阈值 (Min/Max) ≥ {threshold:.2f}%</span>"
-        )
+        self.threshold_label = QLabel(_fmt_threshold_label(threshold, cv_threshold))
         self.threshold_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         header.addWidget(self.threshold_label)
         root.addLayout(header)
+
+        # 判定原因（PASS/FAIL 摘要），运行前隐藏
+        self.reason_label = QLabel("")
+        self.reason_label.setWordWrap(True)
+        self.reason_label.setStyleSheet(
+            "QLabel { color: #444; font-size: 11pt; padding: 2px 6px; }"
+        )
+        self.reason_label.setVisible(False)
+        root.addWidget(self.reason_label)
 
         meta = QFrame()
         meta.setFrameShape(QFrame.StyledPanel)
@@ -211,10 +232,10 @@ class ChannelTab(QWidget):
             )
 
     # —— 状态切换 ——
-    def reset(self, threshold: float) -> None:
-        self.threshold_label.setText(
-            f"<span style='font-size:13pt'>阈值 (Min/Max) ≥ {threshold:.2f}%</span>"
-        )
+    def reset(self, threshold: float, cv_threshold: float = 75.0) -> None:
+        self.threshold_label.setText(_fmt_threshold_label(threshold, cv_threshold))
+        self.reason_label.setVisible(False)
+        self.reason_label.setText("")
         self._active_stage = None
         self._stage_start = None
         self._loading_cur = 0
@@ -261,9 +282,20 @@ class ChannelTab(QWidget):
         self.heatmap.show_flatfield(
             result.flatfield_normalized,
             title=f"归一化平场 — {self.display_name} ({result.num_images} 张)",
+            min_pos=result.metrics.min_position,
+            max_pos=result.metrics.max_position,
         )
         self.metrics_panel.show_metrics(result.metrics)
         self.gallery.show_examples(result.examples)
+        # 判定原因（用于辨别失败模式）
+        reason = getattr(result, "verdict_reason", "")
+        if reason:
+            color = "#2ea043" if result.passed else "#cf222e"
+            self.reason_label.setStyleSheet(
+                f"QLabel {{ color: {color}; font-size: 11pt; padding: 2px 6px; }}"
+            )
+            self.reason_label.setText(reason)
+            self.reason_label.setVisible(True)
         if result.passed:
             self.badge.set_ok()
         else:

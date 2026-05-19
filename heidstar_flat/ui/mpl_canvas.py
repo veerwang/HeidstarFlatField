@@ -149,7 +149,13 @@ class HeatmapCanvas(_CanvasBase):
         ax.set_yticks([])
         self.canvas.draw_idle()
 
-    def show_flatfield(self, normalized: np.ndarray, title: str = "") -> None:
+    def show_flatfield(
+        self,
+        normalized: np.ndarray,
+        title: str = "",
+        min_pos: tuple | None = None,
+        max_pos: tuple | None = None,
+    ) -> None:
         self.figure.clear()
         gs = self.figure.add_gridspec(2, 2, width_ratios=[3, 2], height_ratios=[3, 1])
 
@@ -166,6 +172,25 @@ class HeatmapCanvas(_CanvasBase):
         ax_img.set_xlabel("X (pixels)")
         ax_img.set_ylabel("Y (pixels)")
         self.figure.colorbar(im, ax=ax_img, fraction=0.046, pad=0.04, label="强度")
+
+        # 标注 Min/Max 像素位置（辨别"暗角"vs"中心异常"）
+        if min_pos is not None:
+            r, c = min_pos
+            ax_img.plot(
+                c, r, "x",
+                color="red", markersize=16, markeredgewidth=2.5,
+                label=f"Min @ ({r},{c})",
+            )
+        if max_pos is not None:
+            r, c = max_pos
+            ax_img.plot(
+                c, r, "o",
+                color="#ffd166", markersize=12, markeredgewidth=2.0,
+                markerfacecolor="none",
+                label=f"Max @ ({r},{c})",
+            )
+        if min_pos is not None or max_pos is not None:
+            ax_img.legend(loc="upper right", framealpha=0.85, fontsize=9)
 
         ax_hist = self.figure.add_subplot(gs[0, 1])
         ax_hist.hist(

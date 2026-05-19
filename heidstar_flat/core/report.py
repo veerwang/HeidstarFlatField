@@ -150,8 +150,10 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
     ax.text(0.04, 0.79, "通道汇总", fontsize=14, fontweight="bold",
             transform=ax.transAxes)
 
-    headers = ["通道", "Fluo", "瓦片", "阈值 (%)",
-               "Min/Max (%)", "Michelson (%)", "CV (%)", "判定"]
+    headers = ["通道", "Fluo", "瓦片",
+               "阈值 Min/Max", "阈值 CV",
+               "robust Min/Max (%)", "CV (%)",
+               "原始 Min/Max (%)", "判定"]
     rows = []
     for r in results:
         fluo = r.job.discovered.fluo_name or "—"
@@ -159,10 +161,11 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
             r.job.display_name,
             fluo,
             str(r.num_images),
-            f"{r.job.threshold:.2f}",
-            f"{r.metrics.min_max_ratio_pct:.2f}",
-            f"{r.metrics.michelson_uniformity_pct:.2f}",
+            f"{r.job.threshold:.1f}",
+            f"{r.job.cv_threshold:.1f}",
+            f"{r.metrics.robust_min_max_ratio_pct:.2f}",
             f"{r.metrics.cv_uniformity_pct:.2f}",
+            f"{r.metrics.min_max_ratio_pct:.2f}",
             _verdict_text(r.passed),
         ])
 
@@ -174,7 +177,7 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
         loc="upper left", cellLoc="center",
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(9)
+    table.set_fontsize(8.5)
     table.scale(1, 1.7)
     # 染色：判定列
     for i, r in enumerate(results, 1):
@@ -241,15 +244,23 @@ def _build_overview(result):
     meta_line = (
         f"Fluo: {fluo}    曝光: {expo}    增益: {gain}    "
         f"瓦片: {result.num_images}    网格: {grid}    "
-        f"阈值 (Min/Max) ≥ {result.job.threshold:.2f}%"
+        f"判定: Min/Max ≥ {result.job.threshold:.2f}% ∧ CV ≥ {result.job.cv_threshold:.2f}%"
     )
     ax_hdr.text(
-        0, 0.20, meta_line,
+        0, 0.32, meta_line,
         fontsize=10, color="#444",
         transform=ax_hdr.transAxes,
     )
+    reason = getattr(result, "verdict_reason", "") or ""
+    if reason:
+        ax_hdr.text(
+            0, 0.05, reason,
+            fontsize=9.5, color=_verdict_color(result.passed),
+            fontweight="bold",
+            transform=ax_hdr.transAxes,
+        )
 
-    # —— 热力图 ——
+    # —— 热力图（带 Min/Max 位置标注）——
     ax_hm = fig.add_subplot(gs[1, 0])
     im = ax_hm.imshow(
         result.flatfield_normalized,
@@ -260,6 +271,13 @@ def _build_overview(result):
     ax_hm.set_xlabel("X (pixels)", fontsize=9)
     ax_hm.set_ylabel("Y (pixels)", fontsize=9)
     fig.colorbar(im, ax=ax_hm, fraction=0.046, pad=0.04, label="强度")
+    mr, mc = result.metrics.min_position
+    Mr, Mc = result.metrics.max_position
+    ax_hm.plot(mc, mr, "x", color="red", markersize=14, markeredgewidth=2.2,
+               label=f"Min @ ({mr},{mc})")
+    ax_hm.plot(Mc, Mr, "o", color="#ffd166", markersize=10, markeredgewidth=1.8,
+               markerfacecolor="none", label=f"Max @ ({Mr},{Mc})")
+    ax_hm.legend(loc="upper right", framealpha=0.85, fontsize=8)
 
     # —— 直方图 ——
     ax_hist = fig.add_subplot(gs[1, 1])

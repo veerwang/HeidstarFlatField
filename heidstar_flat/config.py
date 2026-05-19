@@ -27,9 +27,12 @@ class AppConfig:
     channel_prefs: List[ChannelPref] = field(default_factory=list)
     examples_per_channel: int = 3
     output_subdir: str = "flatfield_results"
-    default_threshold: float = 30.0       # 发现到但未在 prefs 中的通道用此值 (Min/Max %)
-    image_subdir: str = "Images"          # 通道目录下的瓦片子目录
-    image_glob: str = "IMG*.tif"          # 瓦片文件名 glob
+    # 每通道 robust Min/Max (P1/P99) 阈值；发现到但未在 prefs 中的通道用此默认
+    default_threshold: float = 30.0
+    # 全局 CV 均匀性阈值（双指标 AND 判定的第二项），所有通道共用
+    cv_threshold: float = 75.0
+    image_subdir: str = "Images"
+    image_glob: str = "IMG*.tif"
 
     def pref_for(self, suffix: str) -> ChannelPref:
         for p in self.channel_prefs:
@@ -47,7 +50,8 @@ class AppConfig:
             channel_prefs=prefs or default_channel_prefs(),
             examples_per_channel=int(data.get("examples_per_channel", 3)),
             output_subdir=data.get("output_subdir", "flatfield_results"),
-            default_threshold=float(data.get("default_threshold", 85.0)),
+            default_threshold=float(data.get("default_threshold", 30.0)),
+            cv_threshold=float(data.get("cv_threshold", 75.0)),
             image_subdir=data.get("image_subdir", "Images"),
             image_glob=data.get("image_glob", "IMG*.tif"),
         )
