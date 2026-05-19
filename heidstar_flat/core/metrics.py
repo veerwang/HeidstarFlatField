@@ -14,14 +14,17 @@ class UniformityMetrics:
     maximum: float
     mean: float
     std: float
-    michelson_uniformity_pct: float          # (1 - (Max-Min)/(Max+Min)) * 100
-    cv_uniformity_pct: float                 # (1 - σ/μ) * 100
+    min_max_ratio_pct: float                 # Min/Max × 100，PASS/FAIL 主判定指标
+    michelson_uniformity_pct: float          # (1 - (Max-Min)/(Max+Min)) * 100，参考
+    cv_uniformity_pct: float                 # (1 - σ/μ) * 100，参考
     center_corner_ratio: float               # 中心 ROI 均值 / 四角 ROI 均值平均
     nine_zone_means: List[float] = field(default_factory=list)  # row-major, 长度 9
 
     def as_table_rows(self) -> List[tuple]:
-        """返回 (指标名, 数值字符串) 列表，供 QTableWidget 直接展示。"""
+        """返回 (指标名, 数值字符串) 列表，供 QTableWidget 直接展示。
+        判定指标用 ★ 标识。"""
         return [
+            ("★ Min/Max 比 (判定)", f"{self.min_max_ratio_pct:.2f} %"),
             ("最小值", f"{self.minimum:.4f}"),
             ("最大值", f"{self.maximum:.4f}"),
             ("均值", f"{self.mean:.4f}"),
@@ -63,6 +66,8 @@ def compute_metrics(flatfield: np.ndarray) -> tuple[np.ndarray, UniformityMetric
 
     cv = (1.0 - std / mean) * 100.0 if mean > 0 else 0.0
 
+    min_max_ratio_pct = (mn / mx * 100.0) if mx > 0 else 0.0
+
     # 九区 ROI：行三等分、列三等分
     rs = np.linspace(0, h, 4, dtype=int)
     cs = np.linspace(0, w, 4, dtype=int)
@@ -81,6 +86,7 @@ def compute_metrics(flatfield: np.ndarray) -> tuple[np.ndarray, UniformityMetric
         maximum=mx,
         mean=mean,
         std=std,
+        min_max_ratio_pct=min_max_ratio_pct,
         michelson_uniformity_pct=michelson,
         cv_uniformity_pct=cv,
         center_corner_ratio=cc_ratio,
@@ -90,7 +96,8 @@ def compute_metrics(flatfield: np.ndarray) -> tuple[np.ndarray, UniformityMetric
 
 
 def passes_threshold(metrics: UniformityMetrics, threshold_pct: float) -> bool:
-    return metrics.michelson_uniformity_pct >= threshold_pct
+    """判定指标：Min/Max ratio (%)。边缘亮度至少为中心的 threshold_pct%。"""
+    return metrics.min_max_ratio_pct >= threshold_pct
 
 
 @dataclass

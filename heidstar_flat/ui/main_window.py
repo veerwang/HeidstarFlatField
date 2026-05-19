@@ -1,11 +1,11 @@
-"""主窗口：目录选择 → 5 通道 Tab → 开始/停止 → 日志面板。"""
+"""主窗口：扫描根目录 → 自动发现通道 → 启动 Worker。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List
 
-from PyQt5.QtCore import Qt, QThread
+from PyQt5.QtCore import Qt, QThread, QTimer
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QAction,
@@ -30,15 +30,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from heidstar_flat.config import (
-    AppConfig,
-    ChannelConfig,
-    load_config,
-    save_config,
-)
+from heidstar_flat.config import AppConfig, load_config, save_config
+from heidstar_flat.core.loader import DiscoveredChannel, discover_channels
 from heidstar_flat.ui.channel_tab import ChannelTab
 from heidstar_flat.ui.settings_dialog import SettingsDialog
 from heidstar_flat.worker import (
+    ChannelJob,
     ChannelResult,
     FlatfieldWorker,
     make_worker_thread,
@@ -49,16 +46,22 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Heidstar 多通道平场性检测")
-        self.resize(1280, 820)
+        self.resize(1280, 860)
 
         self.cfg: AppConfig = load_config()
         self._thread: QThread | None = None
         self._worker: FlatfieldWorker | None = None
-        self._tabs_by_wl: Dict[str, ChannelTab] = {}
+
+        self._discovered: List[DiscoveredChannel] = []
+        self._tabs_by_suffix: Dict[str, ChannelTab] = {}
         self._channel_checks: Dict[str, QCheckBox] = {}
 
+        # 秒表：运行中每秒刷新一次 badge 的 elapsed
+        self._tick_timer = QTimer(self)
+        self._tick_timer.setInterval(1000)
+        self._tick_timer.timeout.connect(self._tick)
+
         self._build_ui()
-        self._refresh_channel_widgets()
 
     # ---------- UI 构建 ----------
     def _build_ui(self) -> None:
@@ -68,24 +71,29 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(central)
         root_layout.setContentsMargins(8, 8, 8, 8)
 
-        # 顶部：输入/输出目录
         io_box = QGroupBox("输入 / 输出")
         io_layout = QVBoxLayout(io_box)
 
         in_row = QHBoxLayout()
-        in_row.addWidget(QLabel("输入目录"))
+        in_row.addWidget(QLabel("扫描根目录"))
         self.input_edit = QLineEdit()
-        self.input_edit.setPlaceholderText("选择包含 *Fluorescence_<波长>_nm_Ex.tiff 的目录")
+        self.input_edit.setPlaceholderText(
+            "选择含 *_<Color>/Images/IMG*.tif 的目录，例如 data/0519"
+        )
+        self.input_edit.editingFinished.connect(self._maybe_rescan)
         in_row.addWidget(self.input_edit, 1)
         in_btn = QPushButton("浏览…")
         in_btn.clicked.connect(self._choose_input_dir)
         in_row.addWidget(in_btn)
+        scan_btn = QPushButton("扫描")
+        scan_btn.clicked.connect(self._rescan)
+        in_row.addWidget(scan_btn)
         io_layout.addLayout(in_row)
 
         out_row = QHBoxLayout()
         out_row.addWidget(QLabel("输出目录"))
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("默认: <输入目录>/flatfield_results")
+        self.output_edit.setPlaceholderText("默认: <扫描根目录>/flatfield_results")
         out_row.addWidget(self.output_edit, 1)
         out_btn = QPushButton("浏览…")
         out_btn.clicked.connect(self._choose_output_dir)
@@ -93,15 +101,13 @@ class MainWindow(QMainWindow):
         io_layout.addLayout(out_row)
         root_layout.addWidget(io_box)
 
-        # 中部：通道勾选 + 控制按钮 + 结果 Tab + 日志
         mid_splitter = QSplitter(Qt.Horizontal)
 
-        # 左侧通道列表 + 控制
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        ch_box = QGroupBox("通道")
+        ch_box = QGroupBox("发现的通道")
         ch_layout = QVBoxLayout(ch_box)
         self.channel_list = QListWidget()
         ch_layout.addWidget(self.channel_list)
@@ -120,9 +126,13 @@ class MainWindow(QMainWindow):
 
         mid_splitter.addWidget(left)
 
-        # 右侧：上半结果 Tab，下半日志
         right_split = QSplitter(Qt.Vertical)
         self.tabs = QTabWidget()
+        self._empty_hint = QLabel(
+            "尚未扫描到通道。请先在上方选择扫描根目录并点击「扫描」。"
+        )
+        self._empty_hint.setAlignment(Qt.AlignCenter)
+        self.tabs.addTab(self._empty_hint, "提示")
         right_split.addWidget(self.tabs)
 
         log_box = QGroupBox("日志")
@@ -142,53 +152,98 @@ class MainWindow(QMainWindow):
         mid_splitter.setStretchFactor(1, 5)
         root_layout.addWidget(mid_splitter, 1)
 
-        # 底部：进度条 + 状态栏
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setVisible(False)
         root_layout.addWidget(self.progress)
 
         self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage("就绪")
+        self.statusBar().showMessage("就绪。请选择扫描根目录。")
 
-        # 顶部工具栏
         tb = QToolBar("Main")
         tb.setMovable(False)
         self.addToolBar(tb)
-        act_settings = QAction("通道与阈值设置", self)
+        act_settings = QAction("通道偏好与设置", self)
         act_settings.triggered.connect(self._open_settings)
         tb.addAction(act_settings)
         act_about = QAction("关于", self)
         act_about.triggered.connect(self._show_about)
         tb.addAction(act_about)
 
-    def _refresh_channel_widgets(self) -> None:
-        # 重置 Tab
-        self.tabs.clear()
-        self._tabs_by_wl.clear()
-        # 重置勾选列表
+    # ---------- 扫描 / 通道发现 ----------
+    def _choose_input_dir(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "选择扫描根目录", self.input_edit.text())
+        if d:
+            self.input_edit.setText(d)
+            self._rescan()
+
+    def _maybe_rescan(self) -> None:
+        text = self.input_edit.text().strip()
+        if text and Path(text).is_dir():
+            self._rescan()
+
+    def _rescan(self) -> None:
+        root = self.input_edit.text().strip()
+        if not root:
+            return
+        try:
+            channels = discover_channels(
+                root,
+                image_subdir=self.cfg.image_subdir,
+                image_glob=self.cfg.image_glob,
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "扫描失败", f"{e}")
+            return
+
+        self._discovered = channels
+        self._rebuild_channel_widgets()
+
+        if not channels:
+            self.statusBar().showMessage(
+                "未在该目录发现通道：需要形如 *_<Color>/Images/IMG*.tif 的结构"
+            )
+            self._append_log(f"扫描 {root}：未发现通道")
+        else:
+            self.statusBar().showMessage(f"发现 {len(channels)} 个通道")
+            self._append_log(
+                f"扫描 {root}：发现 {len(channels)} 个通道 — "
+                + ", ".join(c.suffix for c in channels)
+            )
+
+    def _rebuild_channel_widgets(self) -> None:
+        # 清空 Tabs（包括 hint）
+        while self.tabs.count():
+            w = self.tabs.widget(0)
+            self.tabs.removeTab(0)
+            if w is not self._empty_hint:
+                w.deleteLater()
+        self._tabs_by_suffix.clear()
+
         self.channel_list.clear()
         self._channel_checks.clear()
 
-        for ch in self.cfg.channels:
-            tab = ChannelTab(ch.wavelength, ch.uniformity_threshold)
-            self.tabs.addTab(tab, f"{ch.wavelength} nm")
-            self._tabs_by_wl[ch.wavelength] = tab
+        if not self._discovered:
+            self.tabs.addTab(self._empty_hint, "提示")
+            return
+
+        for ch in self._discovered:
+            pref = self.cfg.pref_for(ch.suffix)
+            display = pref.display_name or ch.display_name
+            tab = ChannelTab(ch.suffix, display, pref.uniformity_threshold)
+            tab.update_from_discovery(ch)
+            self.tabs.addTab(tab, display)
+            self._tabs_by_suffix[ch.suffix] = tab
 
             item = QListWidgetItem(self.channel_list)
-            cb = QCheckBox(f"{ch.wavelength} nm")
+            cb = QCheckBox(display)
             cb.setChecked(True)
             self.channel_list.addItem(item)
             self.channel_list.setItemWidget(item, cb)
             item.setSizeHint(cb.sizeHint())
-            self._channel_checks[ch.wavelength] = cb
+            self._channel_checks[ch.suffix] = cb
 
     # ---------- 槽 ----------
-    def _choose_input_dir(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "选择输入目录", self.input_edit.text())
-        if d:
-            self.input_edit.setText(d)
-
     def _choose_output_dir(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "选择输出目录", self.output_edit.text())
         if d:
@@ -202,7 +257,7 @@ class MainWindow(QMainWindow):
                 save_config(self.cfg)
             except Exception as e:
                 self._append_log(f"保存配置失败: {e}")
-            self._refresh_channel_widgets()
+            self._rebuild_channel_widgets()
 
     def _show_about(self) -> None:
         QMessageBox.information(
@@ -217,42 +272,56 @@ class MainWindow(QMainWindow):
     def _append_log(self, line: str) -> None:
         self.log_view.appendPlainText(line)
 
-    def _selected_channels(self) -> List[ChannelConfig]:
-        return [
-            ch for ch in self.cfg.channels
-            if ch.wavelength in self._channel_checks
-            and self._channel_checks[ch.wavelength].isChecked()
-        ]
+    def _build_jobs(self) -> List[ChannelJob]:
+        jobs: List[ChannelJob] = []
+        for ch in self._discovered:
+            cb = self._channel_checks.get(ch.suffix)
+            if cb is None or not cb.isChecked():
+                continue
+            pref = self.cfg.pref_for(ch.suffix)
+            display = pref.display_name or ch.display_name
+            jobs.append(
+                ChannelJob(
+                    discovered=ch,
+                    display_name=display,
+                    threshold=pref.uniformity_threshold,
+                )
+            )
+        return jobs
 
     def _on_start(self) -> None:
-        input_dir = self.input_edit.text().strip()
-        if not input_dir:
-            QMessageBox.warning(self, "提示", "请先选择输入目录")
+        root = self.input_edit.text().strip()
+        if not root or not Path(root).is_dir():
+            QMessageBox.warning(self, "提示", "请先选择并扫描有效的根目录")
             return
-        in_path = Path(input_dir)
-        if not in_path.is_dir():
-            QMessageBox.warning(self, "提示", f"输入目录不存在: {input_dir}")
+        if not self._discovered:
+            QMessageBox.warning(self, "提示", "未发现通道，请先点击「扫描」")
+            return
+
+        jobs = self._build_jobs()
+        if not jobs:
+            QMessageBox.warning(self, "提示", "至少勾选一个通道")
             return
 
         output_dir = self.output_edit.text().strip()
         if not output_dir:
-            output_dir = str(in_path / self.cfg.output_subdir)
+            output_dir = str(Path(root) / self.cfg.output_subdir)
             self.output_edit.setText(output_dir)
 
-        channels = self._selected_channels()
-        if not channels:
-            QMessageBox.warning(self, "提示", "至少勾选一个通道")
-            return
-
-        # 重置 Tab 状态
-        for ch in channels:
-            if ch.wavelength in self._tabs_by_wl:
-                self._tabs_by_wl[ch.wavelength].reset(ch.uniformity_threshold)
+        total = len(jobs)
+        for i, j in enumerate(jobs, 1):
+            tab = self._tabs_by_suffix.get(j.suffix)
+            if tab is not None:
+                tab.reset(j.threshold)
+                tab.set_queue_position(i, total)
 
         self.log_view.clear()
-        self._append_log(f"输入: {input_dir}")
-        self._append_log(f"输出: {output_dir}")
-        self._append_log(f"通道: {', '.join(c.wavelength for c in channels)}")
+        self._append_log(f"扫描根目录: {root}")
+        self._append_log(f"输出目录: {output_dir}")
+        self._append_log(
+            f"队列 ({total} 个通道): "
+            + " → ".join(j.suffix for j in jobs)
+        )
 
         self.progress.setRange(0, 0)
         self.progress.setVisible(True)
@@ -261,10 +330,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("运行中…")
 
         self._worker = FlatfieldWorker(
-            input_dir=input_dir,
+            jobs=jobs,
             output_root=output_dir,
-            channels=channels,
             examples_per_channel=self.cfg.examples_per_channel,
+            image_glob=self.cfg.image_glob,
         )
         self._thread = make_worker_thread(self._worker)
         self._worker.stage_changed.connect(self._on_stage)
@@ -275,6 +344,7 @@ class MainWindow(QMainWindow):
         self._worker.finished.connect(self._on_all_finished)
         self._thread.finished.connect(self._cleanup_thread)
         self._thread.start()
+        self._tick_timer.start()
 
     def _on_stop(self) -> None:
         if self._worker:
@@ -282,30 +352,42 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("已请求停止，等待当前通道结束…")
             self.stop_btn.setEnabled(False)
 
-    def _on_stage(self, wavelength: str, stage: str) -> None:
-        if wavelength in self._tabs_by_wl:
-            self._tabs_by_wl[wavelength].on_stage(stage)
-            idx = self.tabs.indexOf(self._tabs_by_wl[wavelength])
+    def _on_stage(self, suffix: str, stage: str) -> None:
+        tab = self._tabs_by_suffix.get(suffix)
+        if tab is not None:
+            tab.on_stage(stage)
+            idx = self.tabs.indexOf(tab)
             if idx >= 0:
                 self.tabs.setCurrentIndex(idx)
-        self.statusBar().showMessage(f"{wavelength} nm — {stage}")
+        self.statusBar().showMessage(f"{suffix} — {stage}")
 
-    def _on_progress(self, wavelength: str, current: int, total: int) -> None:
+    def _on_progress(self, suffix: str, current: int, total: int) -> None:
         if total > 0:
             self.progress.setRange(0, total)
             self.progress.setValue(current)
-        self.statusBar().showMessage(f"{wavelength} nm — 加载 {current}/{total}")
+        tab = self._tabs_by_suffix.get(suffix)
+        if tab is not None:
+            tab.on_progress(current, total)
+        self.statusBar().showMessage(f"{suffix} — 加载 {current}/{total}")
+
+    def _tick(self) -> None:
+        """每秒更新一次运行中通道的徽章 (秒表)。"""
+        for tab in self._tabs_by_suffix.values():
+            tab.tick()
 
     def _on_channel_done(self, result: ChannelResult) -> None:
-        if result.wavelength in self._tabs_by_wl:
-            self._tabs_by_wl[result.wavelength].on_result(result)
+        tab = self._tabs_by_suffix.get(result.suffix)
+        if tab is not None:
+            tab.on_result(result)
         self.progress.setRange(0, 0)
 
-    def _on_channel_failed(self, wavelength: str, msg: str) -> None:
-        if wavelength in self._tabs_by_wl:
-            self._tabs_by_wl[wavelength].on_error(msg)
+    def _on_channel_failed(self, suffix: str, msg: str) -> None:
+        tab = self._tabs_by_suffix.get(suffix)
+        if tab is not None:
+            tab.on_error(msg)
 
     def _on_all_finished(self) -> None:
+        self._tick_timer.stop()
         self.progress.setVisible(False)
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)

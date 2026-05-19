@@ -1,6 +1,7 @@
-"""默认配置：通道、阈值、输出目录、文件命名。
+"""默认配置：通道偏好、阈值、扫描子目录约定。
 
-用户可在 GUI 中临时修改，并通过设置对话框持久化到 user config dir。
+通道偏好用 `suffix → ChannelPref` 字典存储；运行时由发现到的通道与之合并，
+未在字典中的 suffix 走全局默认阈值。
 """
 
 from __future__ import annotations
@@ -9,47 +10,72 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 
 @dataclass
-class ChannelConfig:
-    wavelength: str
-    pattern: str
-    uniformity_threshold: float
+class ChannelPref:
+    """对某个通道 suffix 的偏好设置。"""
+
+    suffix: str
+    display_name: Optional[str] = None    # 留空则用 suffix（或叠加 Scan.txt 的 Fluo 名）
+    uniformity_threshold: float = 85.0
 
 
 @dataclass
 class AppConfig:
-    channels: List[ChannelConfig] = field(default_factory=list)
+    channel_prefs: List[ChannelPref] = field(default_factory=list)
     examples_per_channel: int = 3
     output_subdir: str = "flatfield_results"
+    default_threshold: float = 30.0       # 发现到但未在 prefs 中的通道用此值 (Min/Max %)
+    image_subdir: str = "Images"          # 通道目录下的瓦片子目录
+    image_glob: str = "IMG*.tif"          # 瓦片文件名 glob
+
+    def pref_for(self, suffix: str) -> ChannelPref:
+        for p in self.channel_prefs:
+            if p.suffix == suffix:
+                return p
+        return ChannelPref(suffix=suffix, uniformity_threshold=self.default_threshold)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
-        channels = [ChannelConfig(**c) for c in data.get("channels", [])]
+        prefs = [ChannelPref(**p) for p in data.get("channel_prefs", [])]
         return cls(
-            channels=channels or default_channels(),
+            channel_prefs=prefs or default_channel_prefs(),
             examples_per_channel=int(data.get("examples_per_channel", 3)),
             output_subdir=data.get("output_subdir", "flatfield_results"),
+            default_threshold=float(data.get("default_threshold", 85.0)),
+            image_subdir=data.get("image_subdir", "Images"),
+            image_glob=data.get("image_glob", "IMG*.tif"),
         )
 
 
-def default_channels() -> List[ChannelConfig]:
+def default_channel_prefs() -> List[ChannelPref]:
+    """默认 7 个荧光通道的 Min/Max ratio 阈值偏好（边缘亮度 ≥ 中心 X%）。
+
+    阈值依据 data/0519 实测值留出余量：
+    - Yellow/Orange 暗角最重 (~24-28%)，默认 20%
+    - Blue/Green 中等 (~33-37%)，默认 25-30%
+    - Cyan/Red 较好 (~40-42%)，默认 30%
+    - Purple 最均匀 (~57%)，默认 50%
+    需要按你的产线接受范围进一步收紧或放宽。
+    """
     return [
-        ChannelConfig("405", "*Fluorescence_405_nm_Ex.tiff", 85.0),
-        ChannelConfig("488", "*Fluorescence_488_nm_Ex.tiff", 85.0),
-        ChannelConfig("561", "*Fluorescence_561_nm_Ex.tiff", 85.0),
-        ChannelConfig("638", "*Fluorescence_638_nm_Ex.tiff", 85.0),
-        ChannelConfig("730", "*Fluorescence_730_nm_Ex.tiff", 80.0),
+        ChannelPref("Blue", "Blue (DAPI)", 30.0),
+        ChannelPref("Cyan", "Cyan (PVB480)", 30.0),
+        ChannelPref("Green", "Green (PVB520)", 30.0),
+        ChannelPref("Yellow", "Yellow (PVB570)", 20.0),
+        ChannelPref("Orange", "Orange (PVB620)", 25.0),
+        ChannelPref("Red", "Red (PVB690)", 30.0),
+        ChannelPref("Purple", "Purple (PVB780)", 50.0),
     ]
 
 
 def default_config() -> AppConfig:
-    return AppConfig(channels=default_channels())
+    return AppConfig(channel_prefs=default_channel_prefs())
 
 
 def _user_config_dir() -> Path:

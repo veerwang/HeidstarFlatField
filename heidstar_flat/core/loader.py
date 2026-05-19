@@ -1,9 +1,23 @@
-"""按 glob 模式加载 TIFF 图像栈。"""
+"""目录扫描式数据加载。
+
+约定：扫描根目录下的若干「通道目录」，每个通道目录形如 `<prefix>_<Color>/`，
+内部含：
+  - `Images/IMG{row:03d}x{col:03d}.tif`：真正用于拟合平场的瓦片
+  - `Scan.txt`：元数据（Fluo 名、颜色、曝光、增益、网格等）
+  - Result/Preview/Focus/Thumbs：忽略
+
+模块对外暴露：
+  - `parse_scan_txt(path)` — 解析 Scan.txt
+  - `discover_channels(root, ...)` — 列出根目录下所有可识别的通道
+  - `load_channel_tiles(channel, ...)` — 把一个通道的瓦片堆成 (N,H,W) 数组
+"""
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import tifffile
@@ -12,23 +26,193 @@ import tifffile
 ProgressFn = Callable[[int, int], None]
 
 
-def load_image_stack(
-    directory: str | Path,
-    pattern: str,
+# ---------- Scan.txt 解析 ----------
+
+_SECTION_RE = re.compile(r"^\[(?P<name>[^\]]+)\]\s*$")
+_KV_RE = re.compile(r"^(?P<k>[^=]+)=(?P<v>.*)$")
+
+
+def parse_scan_txt(path: Path) -> Dict[str, Dict[str, str]]:
+    """读 Scan.txt 返回 {section: {key: value}}。Scan.txt 不存在时返回空 dict。"""
+    out: Dict[str, Dict[str, str]] = {}
+    if not path.is_file():
+        return out
+    current: Optional[str] = None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m_sec = _SECTION_RE.match(line)
+        if m_sec:
+            current = m_sec.group("name")
+            out.setdefault(current, {})
+            continue
+        if current is None:
+            continue
+        m_kv = _KV_RE.match(line)
+        if m_kv:
+            out[current][m_kv.group("k").strip()] = m_kv.group("v").strip()
+    return out
+
+
+def _first_with_prefix(d: Dict[str, str], prefix: str) -> Optional[str]:
+    for k, v in d.items():
+        if k.startswith(prefix):
+            return v
+    return None
+
+
+def _to_int(s: Optional[str]) -> Optional[int]:
+    if s is None:
+        return None
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(s: Optional[str]) -> Optional[float]:
+    if s is None:
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+# ---------- 通道发现 ----------
+
+@dataclass
+class DiscoveredChannel:
+    """扫到的一个通道。其 suffix 是 *_<Color>/ 里的 <Color>。"""
+
+    directory: Path                       # 通道目录绝对路径
+    suffix: str                           # 目录名 _ 之后的部分（Blue / Cyan / ...）
+    image_dir: Path                       # 实际瓦片所在子目录
+    num_tiles: int                        # 瓦片张数
+    fluo_name: Optional[str] = None       # 例：DAPI / PVB480
+    color_hex: Optional[str] = None       # 例：#0000ff
+    exposure_us: Optional[float] = None   # 单位 µs，来自 Scan.txt
+    gain: Optional[int] = None
+    grid_rows: Optional[int] = None
+    grid_cols: Optional[int] = None
+    tile_width: Optional[int] = None
+    tile_height: Optional[int] = None
+    pixel_bits: Optional[int] = None
+    preview_path: Optional[Path] = None   # 缩略图（用于空闲态展示）
+    scan_meta: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
+    # 给 UI 用
+    @property
+    def display_name(self) -> str:
+        if self.fluo_name:
+            return f"{self.suffix} ({self.fluo_name})"
+        return self.suffix
+
+
+def _extract_suffix(dir_name: str) -> Optional[str]:
+    """目录名最后一个下划线之后的部分作为 suffix。例如
+    `2026-05-19-092323_Blue` → `Blue`。无下划线返回 None。"""
+    if "_" not in dir_name:
+        return None
+    return dir_name.rsplit("_", 1)[-1]
+
+
+def _find_preview(channel_dir: Path) -> Optional[Path]:
+    """寻找一张轻量预览图（优先 lzw 压缩版 ~400KB，避免触碰 100MB+ Result）。"""
+    for pat in ("Preview-*.lzw.tif", "Preview-*.tif"):
+        for p in sorted(channel_dir.glob(pat)):
+            return p
+    thumbs = channel_dir / "Thumbs"
+    if thumbs.is_dir():
+        for p in sorted(thumbs.glob("Preview-*.tif")):
+            return p
+    return None
+
+
+def discover_channels(
+    root: Path | str,
+    image_subdir: str = "Images",
+    image_glob: str = "IMG*.tif",
+    suffix_whitelist: Optional[List[str]] = None,
+) -> List[DiscoveredChannel]:
+    """扫描 `root` 直接子目录，识别符合通道结构的目录。
+
+    suffix_whitelist 不为 None 时，仅返回 suffix 在白名单中的通道（大小写敏感）。
+    """
+    root = Path(root)
+    if not root.is_dir():
+        raise ValueError(f"扫描根目录不存在: {root}")
+
+    results: List[DiscoveredChannel] = []
+    for sub in sorted(root.iterdir()):
+        if not sub.is_dir():
+            continue
+        suffix = _extract_suffix(sub.name)
+        if suffix is None:
+            continue
+        if suffix_whitelist is not None and suffix not in suffix_whitelist:
+            continue
+        images_dir = sub / image_subdir
+        if not images_dir.is_dir():
+            continue
+        tiles = sorted(images_dir.glob(image_glob))
+        if not tiles:
+            continue
+
+        meta = parse_scan_txt(sub / "Scan.txt")
+        fluo = meta.get("Fluo", {})
+        general = meta.get("General", {})
+
+        # 颜色 & Fluo 名键名带 Fluo 名后缀，例如 ColorDAPI / ExpoTimeDAPI
+        fluo_name = fluo.get("Name")
+        color_hex = _first_with_prefix(fluo, "Color")
+        expo = _to_float(_first_with_prefix(fluo, "ExpoTime"))
+        gain = _to_int(_first_with_prefix(fluo, "ExpoGain"))
+
+        ch = DiscoveredChannel(
+            directory=sub.resolve(),
+            suffix=suffix,
+            image_dir=images_dir.resolve(),
+            num_tiles=len(tiles),
+            fluo_name=fluo_name,
+            color_hex=color_hex,
+            exposure_us=expo,
+            gain=gain,
+            grid_rows=_to_int(general.get("RowCount")),
+            grid_cols=_to_int(general.get("ColumnCount")),
+            tile_width=_to_int(general.get("ImageWidth")),
+            tile_height=_to_int(general.get("ImageHeight")),
+            pixel_bits=_to_int(general.get("PixelBits")),
+            preview_path=_find_preview(sub),
+            scan_meta=meta,
+        )
+        results.append(ch)
+
+    return results
+
+
+# ---------- 瓦片加载 ----------
+
+def load_channel_tiles(
+    channel: DiscoveredChannel,
+    image_glob: str = "IMG*.tif",
     progress: ProgressFn | None = None,
 ) -> Tuple[np.ndarray, List[str]]:
-    """读取目录下匹配 `pattern` 的 TIFF，叠成 (N,H,W) 数组。
-
-    所有图像必须 dtype、shape 一致；不一致时直接抛 ValueError。
-    """
-    image_dir = Path(directory)
-    files = sorted(image_dir.glob(pattern))
+    """加载一个通道的所有瓦片为 (N,H,W) 数组。"""
+    files = sorted(channel.image_dir.glob(image_glob))
     if not files:
-        raise ValueError(f"目录 {directory} 中未找到匹配 {pattern} 的图像")
+        raise ValueError(f"通道目录 {channel.directory} 下未找到 {image_glob}")
 
     first = tifffile.imread(files[0])
     if first.ndim != 2:
-        raise ValueError(f"暂只支持单通道 2D 图像，{files[0].name} 形状为 {first.shape}")
+        raise ValueError(
+            f"暂只支持单通道 2D 瓦片，{files[0].name} 形状为 {first.shape}"
+        )
 
     h, w = first.shape
     stack = np.zeros((len(files), h, w), dtype=first.dtype)

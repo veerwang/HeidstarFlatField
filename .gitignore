@@ -37,11 +37,16 @@ htmlcov/
 
 # 运行产物
 flatfield_results/
-flatfield_results_*nm/
+flatfield_results_*/
 /tmp_*
+
+# 数据集（体积大，按需手动管理）
+data/
 
 # 用户本地配置（如果有人不小心把全局配置 copy 进项目）
 config.local.json
 
 # Claude / 工具产物（保留 .claude/settings.local.json 视项目惯例而定，这里默认忽略本地覆盖）
 .claude/settings.local.json
+
+tags

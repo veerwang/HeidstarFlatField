@@ -1,14 +1,12 @@
-"""QThread worker：依次处理多个通道，结果通过 Qt 信号传给主线程。
+"""QThread Worker：依次跑给定通道列表。
 
-设计要点：
-- 单 QThread 顺序跑，所有重计算在子线程内进行；
-- 每个通道完成后释放图像栈和 BaSiC/JAX 资源，缓解长时间内存累积；
-- numpy 数组等通过信号传引用即可（PyQt5 信号本身在跨线程时会做必要的封装）。
+入参由调用方负责合并：`DiscoveredChannel`（来自扫盘）+ 用户阈值偏好。
 """
 
 from __future__ import annotations
 
 import gc
+import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,9 +15,8 @@ from typing import List, Optional
 import numpy as np
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
-from heidstar_flat.config import ChannelConfig
 from heidstar_flat.core.flatfield import calculate_flatfield, clear_jax_caches
-from heidstar_flat.core.loader import load_image_stack
+from heidstar_flat.core.loader import DiscoveredChannel, load_channel_tiles
 from heidstar_flat.core.metrics import (
     ExampleTriplet,
     UniformityMetrics,
@@ -30,10 +27,21 @@ from heidstar_flat.core.metrics import (
 
 
 @dataclass
-class ChannelResult:
-    wavelength: str
-    pattern: str
+class ChannelJob:
+    """一个待处理通道：发现结果 + 用户阈值/显示名。"""
+
+    discovered: DiscoveredChannel
+    display_name: str
     threshold: float
+
+    @property
+    def suffix(self) -> str:
+        return self.discovered.suffix
+
+
+@dataclass
+class ChannelResult:
+    job: ChannelJob
     num_images: int
     flatfield_normalized: np.ndarray
     metrics: UniformityMetrics
@@ -41,29 +49,31 @@ class ChannelResult:
     passed: bool
     output_dir: Path
 
+    @property
+    def suffix(self) -> str:
+        return self.job.suffix
+
 
 class FlatfieldWorker(QObject):
-    """跑在 QThread 内的工作对象。"""
-
-    stage_changed = pyqtSignal(str, str)            # (wavelength, stage_text)
-    log = pyqtSignal(str)                           # 任意日志
-    channel_done = pyqtSignal(object)               # ChannelResult
-    channel_failed = pyqtSignal(str, str)           # (wavelength, error_text)
-    progress = pyqtSignal(str, int, int)            # (wavelength, current, total)
+    stage_changed = pyqtSignal(str, str)       # (suffix, stage_text)
+    log = pyqtSignal(str)
+    channel_done = pyqtSignal(object)          # ChannelResult
+    channel_failed = pyqtSignal(str, str)      # (suffix, error_text)
+    progress = pyqtSignal(str, int, int)       # (suffix, current, total)
     finished = pyqtSignal()
 
     def __init__(
         self,
-        input_dir: str,
-        output_root: str,
-        channels: List[ChannelConfig],
+        jobs: List[ChannelJob],
+        output_root: str | Path,
         examples_per_channel: int,
+        image_glob: str = "IMG*.tif",
     ) -> None:
         super().__init__()
-        self._input_dir = input_dir
+        self._jobs = jobs
         self._output_root = Path(output_root)
-        self._channels = channels
         self._examples_per_channel = examples_per_channel
+        self._image_glob = image_glob
         self._stop = False
 
     def request_stop(self) -> None:
@@ -71,51 +81,68 @@ class FlatfieldWorker(QObject):
 
     def run(self) -> None:
         try:
-            for ch in self._channels:
+            for job in self._jobs:
                 if self._stop:
-                    self.log.emit(f"用户终止，跳过 {ch.wavelength} nm 之后的通道")
+                    self.log.emit(f"用户终止，跳过 {job.suffix} 之后的通道")
                     break
-                self._process_channel(ch)
+                self._process_channel(job)
         finally:
             self.finished.emit()
 
-    def _process_channel(self, ch: ChannelConfig) -> None:
-        wl = ch.wavelength
-        out_dir = self._output_root / f"flatfield_results_{wl}nm"
+    def _process_channel(self, job: ChannelJob) -> None:
+        suffix = job.suffix
+        out_dir = self._output_root / f"flatfield_results_{suffix}"
+        stack = None
+        flatfield = None
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
 
-            self.stage_changed.emit(wl, "加载图像")
-            self.log.emit(f"[{wl} nm] 扫描目录 {self._input_dir} (pattern={ch.pattern})")
+            self.stage_changed.emit(suffix, "加载瓦片")
+            self.log.emit(
+                f"[{suffix}] 扫描 {job.discovered.image_dir} "
+                f"(共 {job.discovered.num_tiles} 张)"
+            )
 
             def on_load(cur: int, total: int) -> None:
-                self.progress.emit(wl, cur, total)
+                self.progress.emit(suffix, cur, total)
 
-            stack, filenames = load_image_stack(
-                self._input_dir, ch.pattern, progress=on_load
+            t = time.monotonic()
+            stack, filenames = load_channel_tiles(
+                job.discovered, image_glob=self._image_glob, progress=on_load
             )
-            self.log.emit(f"[{wl} nm] 加载 {len(filenames)} 张，形状 {stack.shape}")
+            self.log.emit(
+                f"[{suffix}] 加载 {len(filenames)} 张完成 ({time.monotonic()-t:.1f}s)，"
+                f"形状 {stack.shape} dtype={stack.dtype}"
+            )
 
             if self._stop:
-                self.log.emit(f"[{wl} nm] 加载完毕后收到终止信号")
+                self.log.emit(f"[{suffix}] 加载完毕后收到终止信号")
                 return
 
-            self.stage_changed.emit(wl, "BaSiC 拟合平场")
-            flatfield = calculate_flatfield(stack)
-            self.log.emit(f"[{wl} nm] 平场拟合完成，shape={flatfield.shape}")
-
-            self.stage_changed.emit(wl, "计算均匀性指标")
-            normalized, metrics = compute_metrics(flatfield)
-            ok = passes_threshold(metrics, ch.uniformity_threshold)
+            self.stage_changed.emit(suffix, "BaSiC 拟合平场")
             self.log.emit(
-                f"[{wl} nm] Michelson={metrics.michelson_uniformity_pct:.2f}% "
-                f"阈值={ch.uniformity_threshold:.2f}% -> {'OK' if ok else 'NG'}"
+                f"[{suffix}] BaSiC 开始拟合 {stack.shape} {stack.dtype}。"
+                f"首次运行需 JAX/JIT 编译，可能 10-60s；后续通道会快很多。"
+            )
+            t = time.monotonic()
+            flatfield = calculate_flatfield(stack)
+            self.log.emit(
+                f"[{suffix}] BaSiC 拟合完成 ({time.monotonic()-t:.1f}s)，shape={flatfield.shape}"
             )
 
-            self.stage_changed.emit(wl, "生成示例对比")
+            self.stage_changed.emit(suffix, "计算均匀性指标")
+            normalized, metrics = compute_metrics(flatfield)
+            ok = passes_threshold(metrics, job.threshold)
+            self.log.emit(
+                f"[{suffix}] Min/Max={metrics.min_max_ratio_pct:.2f}% "
+                f"(Michelson={metrics.michelson_uniformity_pct:.2f}%, "
+                f"CV={metrics.cv_uniformity_pct:.2f}%) "
+                f"阈值={job.threshold:.2f}% -> {'PASS' if ok else 'FAIL'}"
+            )
+
+            self.stage_changed.emit(suffix, "生成示例对比")
             examples = build_examples(stack, flatfield, self._examples_per_channel)
 
-            # 落盘：原始平场、归一化平场
             try:
                 import tifffile
 
@@ -126,12 +153,10 @@ class FlatfieldWorker(QObject):
                     normalized.astype(np.float32),
                 )
             except Exception as e:
-                self.log.emit(f"[{wl} nm] 落盘失败 (不影响 UI 展示): {e}")
+                self.log.emit(f"[{suffix}] 落盘失败 (不影响 UI 展示): {e}")
 
             result = ChannelResult(
-                wavelength=wl,
-                pattern=ch.pattern,
-                threshold=ch.uniformity_threshold,
+                job=job,
                 num_images=len(filenames),
                 flatfield_normalized=normalized,
                 metrics=metrics,
@@ -143,24 +168,16 @@ class FlatfieldWorker(QObject):
 
         except Exception as e:
             tb = traceback.format_exc()
-            self.log.emit(f"[{wl} nm] 失败: {e}\n{tb}")
-            self.channel_failed.emit(wl, f"{e}")
+            self.log.emit(f"[{suffix}] 失败: {e}\n{tb}")
+            self.channel_failed.emit(suffix, f"{e}")
         finally:
-            # 主动释放：避免下一通道 OOM
-            try:
-                del stack  # type: ignore[name-defined]
-            except Exception:
-                pass
-            try:
-                del flatfield  # type: ignore[name-defined]
-            except Exception:
-                pass
+            del stack
+            del flatfield
             clear_jax_caches()
             gc.collect()
 
 
 def make_worker_thread(worker: FlatfieldWorker) -> QThread:
-    """把 worker move 到一个独立 QThread。调用方负责 start/wait/quit。"""
     thread = QThread()
     worker.moveToThread(thread)
     thread.started.connect(worker.run)
