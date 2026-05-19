@@ -152,7 +152,7 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
 
     headers = ["通道", "Fluo", "瓦片",
                "Min/Max", "CV", "四角对称", "中心", "最暗格", "九格粗糙",
-               "判定"]
+               "顶端饱和", "判定"]
     rows = []
     for r in results:
         fluo = r.job.discovered.fluo_name or "—"
@@ -167,6 +167,7 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
             f"{m.nine_zone_center_to_max_pct:.1f}",
             f"{m.nine_zone_min_to_max_pct:.1f}",
             f"{m.nine_zone_uniformity_pct:.1f}",
+            f"{m.top_saturation_pct:.2f}",
             _verdict_text(r.passed),
         ])
 
@@ -187,6 +188,7 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
         cell.set_text_props(color="white", fontweight="bold")
         # 染色 6 个指标数值列：3..8（headers 索引）
         check_pass = [c.passed for c in r.verdict.checks]
+        # 7 项指标列：3..9
         for col, ok in zip(range(3, 3 + len(check_pass)), check_pass):
             cell = table[(i, col)]
             cell.set_facecolor("#e8f4ec" if ok else "#fbe2e2")
@@ -250,22 +252,26 @@ def _build_overview(result):
     meta_line = (
         f"Fluo: {fluo}    曝光: {expo}    增益: {gain}    "
         f"瓦片: {result.num_images}    网格: {grid}    "
-        f"判定: 6 项 AND"
+        f"判定: 7 项 AND"
     )
     ax_hdr.text(
         0, 0.30, meta_line,
         fontsize=10, color="#444",
         transform=ax_hdr.transAxes,
     )
-    # 6 项检查行内列出（用 ✓/✗ 紧凑显示）
+    # 7 项检查行内列出（用 OK / NG 文本，避免某些 CJK 字体缺 ✗ 字形）
     if getattr(result, "verdict", None) and result.verdict.checks:
         bits = []
         for c in result.verdict.checks:
-            mark = "✓" if c.passed else "✗"
-            bits.append(f"{mark} {c.name} {c.value_pct:.1f}%/{c.threshold_pct:.1f}%")
+            mark = "OK" if c.passed else "NG"
+            direction = getattr(c, "direction", ">=")
+            op = "≥" if direction == ">=" else "≤"
+            bits.append(
+                f"[{mark}] {c.name} {c.value_pct:.1f}%{op}{c.threshold_pct:.1f}%"
+            )
         ax_hdr.text(
             0, 0.04, "   ".join(bits),
-            fontsize=8.5, color="#222",
+            fontsize=8.0, color="#222",
             transform=ax_hdr.transAxes,
         )
 

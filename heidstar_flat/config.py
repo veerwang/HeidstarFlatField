@@ -35,6 +35,7 @@ class AppConfig:
     center_to_max_threshold: float = 95.0               # 中心最亮: center/max_zone
     min_zone_to_max_threshold: float = 40.0             # 最暗格: min_zone/max_zone
     nine_zone_uniformity_threshold: float = 75.0        # 九格粗糙度: 1-σ_zone/μ_zone
+    top_saturation_threshold: float = 5.0               # 顶端饱和率 ≤ 阈值 (% pixels ≥ 0.99)
     image_subdir: str = "Images"
     image_glob: str = "IMG*.tif"
 
@@ -67,6 +68,9 @@ class AppConfig:
             ),
             nine_zone_uniformity_threshold=float(
                 data.get("nine_zone_uniformity_threshold", 75.0)
+            ),
+            top_saturation_threshold=float(
+                data.get("top_saturation_threshold", 5.0)
             ),
             image_subdir=data.get("image_subdir", "Images"),
             image_glob=data.get("image_glob", "IMG*.tif"),

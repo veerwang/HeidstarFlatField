@@ -108,7 +108,7 @@ def _fmt_elapsed(seconds: float) -> str:
 def _fmt_threshold_label(thr: VerdictThresholds) -> str:
     return (
         f"<span style='font-size:13pt'>"
-        f"判定: 6 项 AND  "
+        f"判定: 7 项 AND  "
         f"<span style='color:#666'>(详见下方)</span>"
         f"</span>"
     )
@@ -116,13 +116,14 @@ def _fmt_threshold_label(thr: VerdictThresholds) -> str:
 
 def _threshold_tooltip(thr: VerdictThresholds) -> str:
     return (
-        "6 项 AND 判定阈值：\n"
+        "7 项 AND 判定阈值：\n"
         f"① Min/Max (P1/P99)     ≥ {thr.robust_min_max_pct:.2f}%\n"
         f"② CV 均匀性 (1-σ/μ)    ≥ {thr.cv_pct:.2f}%\n"
         f"③ 九区 四角对称         ≥ {thr.corner_symmetry_pct:.2f}%\n"
         f"④ 九区 中心最亮         ≥ {thr.center_to_max_pct:.2f}%\n"
         f"⑤ 九区 最暗格           ≥ {thr.min_zone_to_max_pct:.2f}%\n"
-        f"⑥ 九区 粗糙度           ≥ {thr.nine_zone_uniformity_pct:.2f}%"
+        f"⑥ 九区 粗糙度           ≥ {thr.nine_zone_uniformity_pct:.2f}%\n"
+        f"⑦ 顶端饱和率           ≤ {thr.top_saturation_pct:.2f}%"
     )
 
 
@@ -307,14 +308,18 @@ class ChannelTab(QWidget):
         self.metrics_panel.show_metrics(result.metrics)
         self.gallery.show_examples(result.examples)
 
-        # 把 6 项检查渲染成 HTML 列表（绿 ✓ / 红 ✗）
+        # 把 7 项检查渲染成 HTML 列表（绿 ✓ / 红 ✗），按 direction 选 ≥/≤
         checks = getattr(result.verdict, "checks", None)
         if checks:
             parts = []
             for c in checks:
                 color = "#2ea043" if c.passed else "#cf222e"
                 glyph = "✓" if c.passed else "✗"
-                op = "≥" if c.passed else "&lt;"
+                direction = getattr(c, "direction", ">=")
+                if direction == ">=":
+                    op = "≥" if c.passed else "&lt;"
+                else:
+                    op = "≤" if c.passed else "&gt;"
                 parts.append(
                     f"<span style='color:{color}; font-weight:bold'>{glyph} {c.name}</span> "
                     f"<span style='color:#333'>{c.value_pct:.2f}% {op} {c.threshold_pct:.2f}%</span>"

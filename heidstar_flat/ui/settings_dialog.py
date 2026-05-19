@@ -72,6 +72,15 @@ class SettingsDialog(QDialog):
         self.nz_unif_spin.setValue(cfg.nine_zone_uniformity_threshold)
         form.addRow("九区 粗糙度阈值 (%)", self.nz_unif_spin)
 
+        self.top_sat_spin = QDoubleSpinBox()
+        self.top_sat_spin.setRange(0.0, 100.0)
+        self.top_sat_spin.setDecimals(2)
+        self.top_sat_spin.setValue(cfg.top_saturation_threshold)
+        self.top_sat_spin.setToolTip(
+            "顶端饱和率上限 (% pixels ≥ 0.99)：超过则判 FAIL，提示 BaSiC 过拟合或中心平台"
+        )
+        form.addRow("顶端饱和率上限 (%, ≤)", self.top_sat_spin)
+
         self.output_subdir_edit = QLineEdit(cfg.output_subdir)
         form.addRow("输出子目录名", self.output_subdir_edit)
 
@@ -156,6 +165,7 @@ class SettingsDialog(QDialog):
             center_to_max_threshold=float(self.center_max_spin.value()),
             min_zone_to_max_threshold=float(self.min_zone_spin.value()),
             nine_zone_uniformity_threshold=float(self.nz_unif_spin.value()),
+            top_saturation_threshold=float(self.top_sat_spin.value()),
             image_subdir=self.image_subdir_edit.text().strip() or "Images",
             image_glob=self.image_glob_edit.text().strip() or "IMG*.tif",
         )

@@ -1,12 +1,15 @@
 """平场均匀性指标计算与判定。
 
-判定使用 6 项 AND 检查，每项独立阈值可配（统一约定"高 = 好，必须 ≥ 阈值"）：
-  1. ★ robust Min/Max  (P1 / P99)         — 抗污点的暗角幅度
-  2. ★ CV 均匀性       (1 − σ/μ)          — 整体分散度
-  3. 四角对称性        (min_corner / max_corner) — 抓装配倾斜 / 同心度偏移
-  4. 中心格最亮        (center / max_zone)  — 抓中心被遮挡
-  5. 最暗格阈值        (min_zone / max_zone) — ROI 平均后的衰减幅度
-  6. 九格粗糙度        (1 − σ_zone/μ_zone) — 大尺度结构均匀性
+判定使用 7 项 AND 检查，每项独立阈值可配。前 6 项是"高 = 好，必须 ≥ 阈值"，
+第 7 项是分布形状检查 "低 = 好，必须 ≤ 阈值"：
+
+  1. ★ robust Min/Max  (P1 / P99)              ≥ 阈值  — 抗污点暗角幅度
+  2. ★ CV 均匀性       (1 − σ/μ)               ≥ 阈值  — 整体分散度
+  3. 四角对称性        (min_corner / max_corner) ≥ 阈值  — 装配倾斜 / 同心度偏移
+  4. 中心格最亮        (center / max_zone)       ≥ 阈值  — 中心被遮挡
+  5. 最暗格阈值        (min_zone / max_zone)     ≥ 阈值  — ROI 平均后的衰减
+  6. 九格粗糙度        (1 − σ_zone/μ_zone)       ≥ 阈值  — 大尺度结构均匀性
+  7. 顶端饱和检测      (% pixels ≥ 0.99)         ≤ 阈值  — BaSiC 过拟合 / 中心平台
 
 也记录 Min/Max 像素位置，用于在热力图上区分"暗角" vs "中心异常"。
 """
@@ -47,6 +50,8 @@ class UniformityMetrics:
     nine_zone_center_to_max_pct: float = 0.0
     nine_zone_min_to_max_pct: float = 0.0
     nine_zone_uniformity_pct: float = 0.0
+    # 分布形状（★ 判定 #7）
+    top_saturation_pct: float = 0.0          # % 像素归一化强度 ≥ 0.99
 
     def as_table_rows(self) -> List[tuple]:
         return [
@@ -56,6 +61,7 @@ class UniformityMetrics:
             ("★ 九区 中心最亮 (判定)", f"{self.nine_zone_center_to_max_pct:.2f} %"),
             ("★ 九区 最暗格 (判定)", f"{self.nine_zone_min_to_max_pct:.2f} %"),
             ("★ 九区 粗糙度 (判定)", f"{self.nine_zone_uniformity_pct:.2f} %"),
+            ("★ 顶端饱和率 (判定, ≤)", f"{self.top_saturation_pct:.2f} %"),
             ("P1 / P99", f"{self.p1:.4f} / {self.p99:.4f}"),
             ("原始 Min / Max", f"{self.minimum:.4f} / {self.maximum:.4f}"),
             ("Min 位置 (row, col)", f"({self.min_position[0]}, {self.min_position[1]})"),
@@ -76,6 +82,7 @@ class VerdictThresholds:
     center_to_max_pct: float
     min_zone_to_max_pct: float
     nine_zone_uniformity_pct: float
+    top_saturation_pct: float                # 第 7 项：% 像素 ≥ 0.99 的上限
 
 
 @dataclass
@@ -84,6 +91,7 @@ class VerdictCheck:
     value_pct: float
     threshold_pct: float
     passed: bool
+    direction: str = ">="                    # ">=": 高=好；"<=": 低=好
 
 
 @dataclass
@@ -100,7 +108,9 @@ class VerdictResult:
             return f"PASS ({inner})"
         fails = [c for c in self.checks if not c.passed]
         inner = " ; ".join(
-            f"{c.name} {c.value_pct:.2f}% < {c.threshold_pct:.2f}%"
+            # 失败时数学符号方向反转：≥ 失败 → 实际 <；≤ 失败 → 实际 >
+            f"{c.name} {c.value_pct:.2f}% "
+            f"{'<' if c.direction == '>=' else '>'} {c.threshold_pct:.2f}%"
             for c in fails
         )
         return f"FAIL ({inner})"
@@ -186,6 +196,9 @@ def compute_metrics(flatfield: np.ndarray) -> Tuple[np.ndarray, UniformityMetric
         (1.0 - nz_std / nz_mean) * 100.0 if nz_mean > 0 else 0.0
     )
 
+    # 顶端饱和检测：归一化强度 ≥ 0.99 的像素占比
+    top_saturation_pct = float(np.sum(norm >= 0.99)) / float(norm.size) * 100.0
+
     metrics = UniformityMetrics(
         minimum=mn,
         maximum=mx,
@@ -205,6 +218,7 @@ def compute_metrics(flatfield: np.ndarray) -> Tuple[np.ndarray, UniformityMetric
         nine_zone_center_to_max_pct=nine_zone_center_to_max_pct,
         nine_zone_min_to_max_pct=nine_zone_min_to_max_pct,
         nine_zone_uniformity_pct=nine_zone_uniformity_pct,
+        top_saturation_pct=top_saturation_pct,
     )
     return norm, metrics
 
@@ -214,19 +228,29 @@ def compute_metrics(flatfield: np.ndarray) -> Tuple[np.ndarray, UniformityMetric
 def evaluate_verdict(
     metrics: UniformityMetrics, thr: VerdictThresholds
 ) -> VerdictResult:
-    """6 项 AND 判定。返回结构化结果（含每项 pass/fail）。"""
+    """7 项 AND 判定。返回结构化结果（含每项 pass/fail 与比较方向）。"""
+    # (name, value, threshold, direction)
     items = [
-        ("Min/Max", metrics.robust_min_max_ratio_pct, thr.robust_min_max_pct),
-        ("CV", metrics.cv_uniformity_pct, thr.cv_pct),
-        ("四角对称", metrics.nine_zone_corner_symmetry_pct, thr.corner_symmetry_pct),
-        ("中心最亮", metrics.nine_zone_center_to_max_pct, thr.center_to_max_pct),
-        ("最暗格", metrics.nine_zone_min_to_max_pct, thr.min_zone_to_max_pct),
-        ("九格粗糙度", metrics.nine_zone_uniformity_pct, thr.nine_zone_uniformity_pct),
+        ("Min/Max", metrics.robust_min_max_ratio_pct, thr.robust_min_max_pct, ">="),
+        ("CV", metrics.cv_uniformity_pct, thr.cv_pct, ">="),
+        ("四角对称", metrics.nine_zone_corner_symmetry_pct, thr.corner_symmetry_pct, ">="),
+        ("中心最亮", metrics.nine_zone_center_to_max_pct, thr.center_to_max_pct, ">="),
+        ("最暗格", metrics.nine_zone_min_to_max_pct, thr.min_zone_to_max_pct, ">="),
+        ("九格粗糙度", metrics.nine_zone_uniformity_pct, thr.nine_zone_uniformity_pct, ">="),
+        ("顶端饱和", metrics.top_saturation_pct, thr.top_saturation_pct, "<="),
     ]
-    checks = [
-        VerdictCheck(name=n, value_pct=float(v), threshold_pct=float(t), passed=v >= t)
-        for n, v, t in items
-    ]
+    checks = []
+    for name, value, t, direction in items:
+        passed = (value >= t) if direction == ">=" else (value <= t)
+        checks.append(
+            VerdictCheck(
+                name=name,
+                value_pct=float(value),
+                threshold_pct=float(t),
+                passed=passed,
+                direction=direction,
+            )
+        )
     return VerdictResult(passed=all(c.passed for c in checks), checks=checks)
 
 

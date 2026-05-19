@@ -154,7 +154,8 @@ class FlatfieldWorker(QObject):
                 f"[{suffix}] 九区: 四角对称={metrics.nine_zone_corner_symmetry_pct:.2f}%, "
                 f"中心最亮={metrics.nine_zone_center_to_max_pct:.2f}%, "
                 f"最暗格={metrics.nine_zone_min_to_max_pct:.2f}%, "
-                f"粗糙度={metrics.nine_zone_uniformity_pct:.2f}%"
+                f"粗糙度={metrics.nine_zone_uniformity_pct:.2f}%, "
+                f"顶端饱和={metrics.top_saturation_pct:.2f}%"
             )
             self.log.emit(
                 f"[{suffix}] Min 位置 (row,col)={metrics.min_position}, "

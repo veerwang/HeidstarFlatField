@@ -54,6 +54,7 @@ def _build_thresholds(cfg: AppConfig, per_channel_threshold: float) -> VerdictTh
         center_to_max_pct=cfg.center_to_max_threshold,
         min_zone_to_max_pct=cfg.min_zone_to_max_threshold,
         nine_zone_uniformity_pct=cfg.nine_zone_uniformity_threshold,
+        top_saturation_pct=cfg.top_saturation_threshold,
     )
 
 
