@@ -123,14 +123,30 @@ def _extract_suffix(dir_name: str) -> Optional[str]:
 
 
 def _find_preview(channel_dir: Path) -> Optional[Path]:
-    """寻找一张轻量预览图（优先 lzw 压缩版 ~400KB，避免触碰 100MB+ Result）。"""
-    for pat in ("Preview-*.lzw.tif", "Preview-*.tif"):
-        for p in sorted(channel_dir.glob(pat)):
+    """寻找一张轻量预览图。
+
+    **优先非 LZW 压缩版本**：tifffile 解 LZW 需要可选的 imagecodecs 包，
+    缺包时会抛 `<COMPRESSION.LZW: 5> requires the 'imagecodecs' package`。
+    多数 Scan 目录里 `Preview-X.tif` 和 `Preview-X.lzw.tif` 都存在且大小相近，
+    挑非压缩的更稳。
+    """
+    def _pick_non_lzw_then_lzw(paths) -> Optional[Path]:
+        # 第一轮：非 lzw
+        for p in paths:
+            if ".lzw." not in p.name:
+                return p
+        # 第二轮：lzw（需要 imagecodecs，可能加载失败）
+        for p in paths:
             return p
+        return None
+
+    chosen = _pick_non_lzw_then_lzw(sorted(channel_dir.glob("Preview-*.tif")))
+    if chosen is not None:
+        return chosen
+
     thumbs = channel_dir / "Thumbs"
     if thumbs.is_dir():
-        for p in sorted(thumbs.glob("Preview-*.tif")):
-            return p
+        return _pick_non_lzw_then_lzw(sorted(thumbs.glob("Preview-*.tif")))
     return None
 
 

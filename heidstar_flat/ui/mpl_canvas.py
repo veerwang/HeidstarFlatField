@@ -135,7 +135,14 @@ class HeatmapCanvas(_CanvasBase):
 
             img = tifffile.imread(str(image_path))
         except Exception as e:
-            self.show_placeholder(f"预览加载失败: {e}")
+            msg = str(e)
+            hint = ""
+            if "imagecodecs" in msg.lower() or "lzw" in msg.lower():
+                hint = (
+                    "\n\n该 TIFF 使用 LZW 压缩，需要安装可选依赖：\n"
+                    "    pip install imagecodecs"
+                )
+            self.show_placeholder(f"预览加载失败: {msg}{hint}")
             return
 
         self.figure.clear()
