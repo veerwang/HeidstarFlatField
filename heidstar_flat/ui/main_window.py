@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List
 
-from PyQt5.QtCore import Qt, QThread, QTimer
+from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QAction,
     QCheckBox,
@@ -46,6 +46,34 @@ from heidstar_flat.worker import (
 )
 
 
+class _ScanWorker(QObject):
+    """后台扫描根目录 → 发现通道。
+
+    `discover_channels` 同步执行可能因子目录多 / 网络盘慢而阻塞 UI 几秒到几分钟，
+    放到独立 QThread 里跑，主线程通过 finished/failed 信号接收结果。
+    """
+
+    finished = pyqtSignal(list)   # List[DiscoveredChannel]
+    failed = pyqtSignal(str)
+
+    def __init__(self, root: str, image_subdir: str, image_glob: str) -> None:
+        super().__init__()
+        self._root = root
+        self._image_subdir = image_subdir
+        self._image_glob = image_glob
+
+    def run(self) -> None:
+        try:
+            channels = discover_channels(
+                self._root,
+                image_subdir=self._image_subdir,
+                image_glob=self._image_glob,
+            )
+            self.finished.emit(channels)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 def _build_thresholds(cfg: AppConfig, per_channel_threshold: float) -> VerdictThresholds:
     return VerdictThresholds(
         robust_min_max_pct=per_channel_threshold,
@@ -79,6 +107,10 @@ class MainWindow(QMainWindow):
         self._log_buffer: List[str] = []
         self._log_dialog: LogDialog | None = None
 
+        # 扫描子线程（异步发现通道，避免大目录卡 UI）
+        self._scan_thread: QThread | None = None
+        self._scan_worker: _ScanWorker | None = None
+
         # 秒表：运行中每秒刷新一次 badge 的 elapsed
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(1000)
@@ -105,12 +137,12 @@ class MainWindow(QMainWindow):
         )
         self.input_edit.editingFinished.connect(self._maybe_rescan)
         in_row.addWidget(self.input_edit, 1)
-        in_btn = QPushButton("浏览…")
-        in_btn.clicked.connect(self._choose_input_dir)
-        in_row.addWidget(in_btn)
-        scan_btn = QPushButton("扫描")
-        scan_btn.clicked.connect(self._rescan)
-        in_row.addWidget(scan_btn)
+        self.browse_btn = QPushButton("浏览…")
+        self.browse_btn.clicked.connect(self._choose_input_dir)
+        in_row.addWidget(self.browse_btn)
+        self.scan_btn = QPushButton("扫描")
+        self.scan_btn.clicked.connect(self._rescan)
+        in_row.addWidget(self.scan_btn)
         io_layout.addLayout(in_row)
 
         out_row = QHBoxLayout()
@@ -213,19 +245,38 @@ class MainWindow(QMainWindow):
         root = self.input_edit.text().strip()
         if not root:
             return
-        try:
-            channels = discover_channels(
-                root,
-                image_subdir=self.cfg.image_subdir,
-                image_glob=self.cfg.image_glob,
-            )
-        except Exception as e:
-            QMessageBox.warning(self, "扫描失败", f"{e}")
+        # 已有扫描在跑，忽略重复触发（editingFinished 可能频繁触发）
+        if self._scan_thread is not None and self._scan_thread.isRunning():
             return
 
+        self._set_scan_controls_enabled(False)
+        self.statusBar().showMessage(f"扫描中: {root} …")
+        self._append_log(f"开始扫描: {root}")
+
+        self._scan_worker = _ScanWorker(
+            root, self.cfg.image_subdir, self.cfg.image_glob
+        )
+        self._scan_thread = QThread()
+        self._scan_worker.moveToThread(self._scan_thread)
+        self._scan_thread.started.connect(self._scan_worker.run)
+        self._scan_worker.finished.connect(self._on_scan_finished)
+        self._scan_worker.failed.connect(self._on_scan_failed)
+        # 完成或失败都退出 QThread 事件循环
+        self._scan_worker.finished.connect(self._scan_thread.quit)
+        self._scan_worker.failed.connect(self._scan_thread.quit)
+        self._scan_thread.finished.connect(self._cleanup_scan_thread)
+        self._scan_thread.start()
+
+    def _set_scan_controls_enabled(self, enabled: bool) -> None:
+        """扫描期间禁用输入栏 / 浏览 / 扫描按钮，避免并发触发。"""
+        self.input_edit.setEnabled(enabled)
+        self.browse_btn.setEnabled(enabled)
+        self.scan_btn.setEnabled(enabled)
+
+    def _on_scan_finished(self, channels: list) -> None:
         self._discovered = channels
         self._rebuild_channel_widgets()
-
+        root = self.input_edit.text().strip()
         if not channels:
             self.statusBar().showMessage(
                 "未在该目录发现通道：需要形如 *_<Color>/Images/IMG*.tif 的结构"
@@ -237,6 +288,20 @@ class MainWindow(QMainWindow):
                 f"扫描 {root}：发现 {len(channels)} 个通道 — "
                 + ", ".join(c.suffix for c in channels)
             )
+
+    def _on_scan_failed(self, err: str) -> None:
+        QMessageBox.warning(self, "扫描失败", err)
+        self._append_log(f"扫描失败: {err}")
+        self.statusBar().showMessage("扫描失败")
+
+    def _cleanup_scan_thread(self) -> None:
+        if self._scan_thread is not None:
+            self._scan_thread.deleteLater()
+            self._scan_thread = None
+        if self._scan_worker is not None:
+            self._scan_worker.deleteLater()
+            self._scan_worker = None
+        self._set_scan_controls_enabled(True)
 
     def _rebuild_channel_widgets(self) -> None:
         # 清空 Tabs（包括 hint）
@@ -503,7 +568,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "导出完成", f"PDF 报告已保存到:\n{path}")
         finally:
             self.export_btn.setEnabled(True)
-            self.start_btn.setEnabled(True)
+            # 只在没有 FlatfieldWorker 在跑的时候才重开「开始」按钮；
+            # 否则用户连点会创建第二个 worker，两份回调争抢 _tabs_by_suffix / _results。
+            if self._thread is None or not self._thread.isRunning():
+                self.start_btn.setEnabled(True)
 
     def _cleanup_thread(self) -> None:
         if self._thread is not None:
@@ -513,8 +581,57 @@ class MainWindow(QMainWindow):
             self._worker.deleteLater()
             self._worker = None
 
+    def _block_pending_signals(self) -> None:
+        """关窗前切断 worker → UI 的信号路径，避免回调进入将被销毁的对象。"""
+        for w in (self._worker, self._scan_worker):
+            if w is None:
+                continue
+            try:
+                w.blockSignals(True)
+            except Exception:
+                pass
+
     def closeEvent(self, event) -> None:
-        if self._thread is not None and self._thread.isRunning():
+        # 没有计算线程在跑，直接关
+        if self._thread is None or not self._thread.isRunning():
+            self._block_pending_signals()
+            self._tick_timer.stop()
+            event.accept()
+            return
+
+        # 有计算线程在跑，让用户决定：等待 / 强退 / 取消
+        reply = QMessageBox.question(
+            self,
+            "处理中",
+            "当前正在处理通道。\n\n"
+            "[Yes] 等待当前通道结束后退出（推荐）\n"
+            "[No] 强制退出（可能不稳定）\n"
+            "[Cancel] 不退出，继续运行",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Cancel:
+            event.ignore()
+            return
+
+        # 在 wait/accept 前先切断信号，避免回调进入将被销毁的 UI 对象
+        self._block_pending_signals()
+
+        if reply == QMessageBox.Yes:
             self._on_stop()
-            self._thread.wait(5000)
+            self.statusBar().showMessage("等待当前通道结束（最多 10 分钟）…")
+            from PyQt5.QtWidgets import QApplication
+
+            # BaSiC 首次 JAX 编译可达 60s+，给到 10 分钟覆盖一个完整通道的最坏情况
+            ticks = 0
+            while self._thread.isRunning() and ticks < 6000:  # 6000 × 100ms = 10 min
+                self._thread.wait(100)
+                QApplication.processEvents()
+                ticks += 1
+
+        # 最终防御性等待：避免 QThread 析构时仍在运行而 abort 整个程序
+        if self._thread.isRunning():
+            self._thread.wait(3000)
+
+        self._tick_timer.stop()
         event.accept()
