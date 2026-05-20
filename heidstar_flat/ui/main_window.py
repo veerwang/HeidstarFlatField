@@ -131,6 +131,15 @@ class MainWindow(QMainWindow):
 
         ch_box = QGroupBox("发现的通道")
         ch_layout = QVBoxLayout(ch_box)
+        select_row = QHBoxLayout()
+        select_all_btn = QPushButton("全选")
+        select_all_btn.clicked.connect(lambda: self._set_all_channels_checked(True))
+        select_none_btn = QPushButton("全不选")
+        select_none_btn.clicked.connect(lambda: self._set_all_channels_checked(False))
+        select_row.addWidget(select_all_btn)
+        select_row.addWidget(select_none_btn)
+        select_row.addStretch(1)
+        ch_layout.addLayout(select_row)
         self.channel_list = QListWidget()
         ch_layout.addWidget(self.channel_list)
         left_layout.addWidget(ch_box, 1)
@@ -286,6 +295,10 @@ class MainWindow(QMainWindow):
             "支持 Ubuntu 22.04 / Windows。\n\n"
             "源代码运行: python run.py",
         )
+
+    def _set_all_channels_checked(self, checked: bool) -> None:
+        for cb in self._channel_checks.values():
+            cb.setChecked(checked)
 
     def _append_log(self, line: str) -> None:
         self._log_buffer.append(line)
