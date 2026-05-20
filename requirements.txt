@@ -4,7 +4,5 @@ tifffile>=2022.5.4
 scikit-image>=0.19
 basicpy>=1.0.0
 PyQt5>=5.15
-
-# 可选：若 Preview 缩略图只有 LZW 压缩版本，tifffile 解码需要它；
-# 当前 _find_preview 优先挑非压缩 .tif，未触发也不影响主流程
-# imagecodecs>=2023.1.23
+# tifffile 解码 LZW/JPEG/Deflate 等压缩 TIFF 时需要
+imagecodecs>=2023.1.23
