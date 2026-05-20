@@ -231,7 +231,17 @@ def load_channel_tiles(
         )
 
     h, w = first.shape
-    stack = np.zeros((len(files), h, w), dtype=first.dtype)
+    estimated_bytes = len(files) * h * w * first.dtype.itemsize
+    try:
+        stack = np.zeros((len(files), h, w), dtype=first.dtype)
+    except MemoryError as e:
+        # 给清晰可操作的中文提示替代裸 MemoryError，worker 会把这条
+        # 信息 emit 给 UI 的「错误徽章」+ 日志
+        raise MemoryError(
+            f"内存不足：需要为 {len(files)} 张 {h}×{w} {first.dtype} "
+            f"瓦片分配约 {estimated_bytes / 1024 / 1024:.0f} MB 连续数组；"
+            f"建议减少单次勾选的通道数 / 分批处理，或换更大内存的机器"
+        ) from e
     stack[0] = first
     if progress:
         progress(1, len(files))

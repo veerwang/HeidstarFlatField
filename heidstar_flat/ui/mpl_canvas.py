@@ -128,8 +128,24 @@ class HeatmapCanvas(_CanvasBase):
             spine.set_visible(False)
         self.canvas.draw_idle()
 
+    # 主线程同步读 TIFF 的大小阈值；超过的预览图直接跳过显示占位文字，
+    # 避免在「扫描完成 → 自动刷预览」的瞬间因为大文件 I/O 把 UI 卡住几秒。
+    _PREVIEW_MAX_BYTES = 20 * 1024 * 1024
+
     def show_preview(self, image_path: Path, caption: str) -> None:
         """加载并展示一张轻量预览图（如 Thumbs/Preview-*.tif）。"""
+        try:
+            size = image_path.stat().st_size
+        except OSError:
+            size = 0
+        if size > self._PREVIEW_MAX_BYTES:
+            self.show_placeholder(
+                f"预览图过大已跳过 ({size / 1024 / 1024:.1f} MB)\n\n"
+                f"{image_path.name}\n\n"
+                f"运行通道后此处会显示归一化平场热力图。"
+            )
+            return
+
         try:
             import tifffile
 
