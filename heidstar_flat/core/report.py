@@ -213,7 +213,8 @@ def _build_overview(result):
     fig = Figure(figsize=A4_PORTRAIT)
     gs = fig.add_gridspec(
         4, 2,
-        height_ratios=[0.7, 3.5, 2.5, 3.5],
+        # 头部行高从 0.7 加到 1.4，给 7 项判据 2 行排版留空间
+        height_ratios=[1.4, 3.5, 2.5, 3.5],
         width_ratios=[1.2, 1],
         hspace=0.45, wspace=0.30,
         left=0.06, right=0.96, top=0.96, bottom=0.04,
@@ -255,11 +256,12 @@ def _build_overview(result):
         f"判定: 7 项 AND"
     )
     ax_hdr.text(
-        0, 0.30, meta_line,
+        0, 0.55, meta_line,
         fontsize=10, color="#444",
         transform=ax_hdr.transAxes,
     )
-    # 7 项检查行内列出（用 OK / NG 文本，避免某些 CJK 字体缺 ✗ 字形）
+    # 7 项检查（用 OK / NG 文本，避免某些 CJK 字体缺 ✗ 字形）；
+    # 分两行显示（4 + 3），避免单行超出页面右边被截断。
     if getattr(result, "verdict", None) and result.verdict.checks:
         bits = []
         for c in result.verdict.checks:
@@ -269,10 +271,16 @@ def _build_overview(result):
             bits.append(
                 f"[{mark}] {c.name} {c.value_pct:.1f}%{op}{c.threshold_pct:.1f}%"
             )
+        mid = (len(bits) + 1) // 2  # 7 → 4
+        line1 = "   ".join(bits[:mid])
+        line2 = "   ".join(bits[mid:])
         ax_hdr.text(
-            0, 0.04, "   ".join(bits),
-            fontsize=8.0, color="#222",
+            0, 0.05,
+            f"{line1}\n{line2}",
+            fontsize=8.5, color="#222",
             transform=ax_hdr.transAxes,
+            va="bottom",
+            linespacing=1.6,
         )
 
     # —— 热力图（带 Min/Max 位置标注）——
