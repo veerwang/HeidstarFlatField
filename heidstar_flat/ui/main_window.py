@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, List
 
 from PyQt5.QtCore import Qt, QThread, QTimer
-from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QAction,
     QCheckBox,
@@ -19,7 +18,6 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSplitter,
@@ -37,6 +35,7 @@ from heidstar_flat.core.loader import DiscoveredChannel, discover_channels
 from heidstar_flat.core.metrics import VerdictThresholds
 from heidstar_flat.core.report import generate_pdf_report
 from heidstar_flat.ui.channel_tab import ChannelTab
+from heidstar_flat.ui.log_dialog import LogDialog
 from heidstar_flat.ui.settings_dialog import SettingsDialog
 from heidstar_flat.worker import (
     ChannelJob,
@@ -74,6 +73,10 @@ class MainWindow(QMainWindow):
         # 已完成通道的结果，按通道发现顺序累积；用于 PDF 导出
         self._results: List[ChannelResult] = []
         self._last_output_dir: str = ""
+
+        # 日志：缓存全部历史，按需在 LogDialog 中显示
+        self._log_buffer: List[str] = []
+        self._log_dialog: LogDialog | None = None
 
         # 秒表：运行中每秒刷新一次 badge 的 elapsed
         self._tick_timer = QTimer(self)
@@ -150,32 +153,14 @@ class MainWindow(QMainWindow):
 
         mid_splitter.addWidget(left)
 
-        right_split = QSplitter(Qt.Vertical)
         self.tabs = QTabWidget()
         self._empty_hint = QLabel(
             "尚未扫描到通道。请先在上方选择扫描根目录并点击「扫描」。"
         )
         self._empty_hint.setAlignment(Qt.AlignCenter)
         self.tabs.addTab(self._empty_hint, "提示")
-        right_split.addWidget(self.tabs)
 
-        log_box = QGroupBox("日志")
-        log_layout = QVBoxLayout(log_box)
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-        font = QFont("Monospace")
-        font.setStyleHint(QFont.TypeWriter)
-        font.setPointSize(10)
-        self.log_view.setFont(font)
-        # 控件高度上限 ≈ 之前 4:1 拉伸下的一半（用绝对值更稳）
-        self.log_view.setMaximumHeight(140)
-        log_layout.addWidget(self.log_view)
-        right_split.addWidget(log_box)
-        # 把垂直拉伸从 4:1 调到 9:1，配合 maximumHeight 一起把日志压到一半
-        right_split.setStretchFactor(0, 9)
-        right_split.setStretchFactor(1, 1)
-
-        mid_splitter.addWidget(right_split)
+        mid_splitter.addWidget(self.tabs)
         mid_splitter.setStretchFactor(0, 1)
         mid_splitter.setStretchFactor(1, 5)
         root_layout.addWidget(mid_splitter, 1)
@@ -194,6 +179,10 @@ class MainWindow(QMainWindow):
         act_settings = QAction("通道偏好与设置", self)
         act_settings.triggered.connect(self._open_settings)
         tb.addAction(act_settings)
+        act_log = QAction("查看日志", self)
+        act_log.setShortcut("Ctrl+L")
+        act_log.triggered.connect(self._show_log_dialog)
+        tb.addAction(act_log)
         act_about = QAction("关于", self)
         act_about.triggered.connect(self._show_about)
         tb.addAction(act_about)
@@ -299,7 +288,21 @@ class MainWindow(QMainWindow):
         )
 
     def _append_log(self, line: str) -> None:
-        self.log_view.appendPlainText(line)
+        self._log_buffer.append(line)
+        # 控制内存，保留最近 5000 行（每行通常 < 200B，整体上限 ~1MB）
+        if len(self._log_buffer) > 5000:
+            self._log_buffer = self._log_buffer[-5000:]
+        if self._log_dialog is not None and self._log_dialog.isVisible():
+            self._log_dialog.append(line)
+
+    def _show_log_dialog(self) -> None:
+        if self._log_dialog is None:
+            self._log_dialog = LogDialog(self)
+        # 每次打开都用全量 buffer 重新填充，避免遗漏关闭期间累积的日志
+        self._log_dialog.set_lines(self._log_buffer)
+        self._log_dialog.show()
+        self._log_dialog.raise_()
+        self._log_dialog.activateWindow()
 
     def _build_jobs(self) -> List[ChannelJob]:
         jobs: List[ChannelJob] = []
@@ -351,7 +354,9 @@ class MainWindow(QMainWindow):
                 tab.reset(j.thresholds)
                 tab.set_queue_position(i, total)
 
-        self.log_view.clear()
+        self._log_buffer.clear()
+        if self._log_dialog is not None and self._log_dialog.isVisible():
+            self._log_dialog.set_lines([])
         self._append_log(f"扫描根目录: {root}")
         self._append_log(f"输出目录: {output_dir}")
         self._append_log(
