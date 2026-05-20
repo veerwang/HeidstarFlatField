@@ -144,8 +144,18 @@ def _argmax_position(arr: np.ndarray) -> Tuple[int, int]:
 
 def compute_metrics(flatfield: np.ndarray) -> Tuple[np.ndarray, UniformityMetrics]:
     """计算归一化平场和均匀性指标。"""
+    if flatfield.ndim != 2 or flatfield.size == 0:
+        raise ValueError(
+            f"flatfield 必须是非空 2D 数组，当前 shape={flatfield.shape}"
+        )
+    h, w = flatfield.shape
+    if h < 3 or w < 3:
+        # 九区 ROI 需要在每个维度上至少切 3 段；过小会让 _roi_mean 收到
+        # 空 block 返回 nan，进而让 verdict 全部 FAIL（且原因不明）
+        raise ValueError(
+            f"flatfield 尺寸过小 (H={h}, W={w})，九区分析需要至少 3×3 像素"
+        )
     norm = _normalize(flatfield)
-    h, w = norm.shape
 
     mn = float(np.min(norm))
     mx = float(np.max(norm))

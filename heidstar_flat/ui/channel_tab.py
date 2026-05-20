@@ -73,6 +73,10 @@ class VerdictBadge(QLabel):
         self.setText(f"错误: {msg[:40]}")
         self._apply_style("#bf4b00", "#ffffff")
 
+    def set_cancelled(self) -> None:
+        self.setText("已取消")
+        self._apply_style("#9a9a9a", "#ffffff")
+
 
 class ColorSwatch(QLabel):
     def __init__(self, hex_color: Optional[str] = None, parent=None) -> None:
@@ -341,3 +345,14 @@ class ChannelTab(QWidget):
         self._active_stage = None
         self._stage_start = None
         self.badge.set_error(msg)
+
+    def mark_cancelled_if_pending(self) -> None:
+        """如果当前 tab 仍处于排队 / 运行中，标记为已取消。
+
+        用户中途点「停止」后，已完成的通道保留 PASS/FAIL/错误徽章，
+        未启动或正在被打断的通道由这个方法统一改为「已取消」。
+        """
+        if self._active_stage is not None or self.badge.text().startswith("排队"):
+            self._active_stage = None
+            self._stage_start = None
+            self.badge.set_cancelled()

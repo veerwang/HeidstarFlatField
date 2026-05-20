@@ -248,6 +248,11 @@ class MainWindow(QMainWindow):
         # 已有扫描在跑，忽略重复触发（editingFinished 可能频繁触发）
         if self._scan_thread is not None and self._scan_thread.isRunning():
             return
+        # 计算 worker 跑期间禁止重扫，否则 _rebuild_channel_widgets 会销毁
+        # 还在被信号回调引用的 ChannelTab，触发野指针访问
+        if self._thread is not None and self._thread.isRunning():
+            self._append_log("通道处理进行中，扫描请求被忽略")
+            return
 
         self._set_scan_controls_enabled(False)
         self.statusBar().showMessage(f"扫描中: {root} …")
@@ -314,6 +319,12 @@ class MainWindow(QMainWindow):
 
         self.channel_list.clear()
         self._channel_checks.clear()
+
+        # 旧扫描的结果与新扫描的通道集合无关，必须清掉；否则用户重扫
+        # 后直接「导出 PDF」会把旧结果当成新扫描的数据写进报告
+        self._results.clear()
+        self._last_output_dir = ""
+        self.export_btn.setEnabled(False)
 
         if not self._discovered:
             self.tabs.addTab(self._empty_hint, "提示")
@@ -448,6 +459,8 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(True)
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        # worker 运行期间禁止重扫，避免销毁仍被信号回调引用的 ChannelTab
+        self._set_scan_controls_enabled(False)
         self.statusBar().showMessage("运行中…")
 
         self._worker = FlatfieldWorker(
@@ -514,6 +527,12 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        # worker 结束，恢复扫描相关控件
+        self._set_scan_controls_enabled(True)
+        # 用户中途 stop 时未完成的通道徽章可能还停在「排队 N/M」或「运行中」，
+        # 统一标记为「已取消」便于用户一眼分清完成 vs 中断
+        for tab in self._tabs_by_suffix.values():
+            tab.mark_cancelled_if_pending()
         self.statusBar().showMessage("全部完成")
         self._append_log("====== 全部通道处理结束 ======")
 
