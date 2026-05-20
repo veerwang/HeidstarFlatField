@@ -213,8 +213,9 @@ def _build_overview(result):
     fig = Figure(figsize=A4_PORTRAIT)
     gs = fig.add_gridspec(
         4, 2,
-        # 头部行高从 0.7 加到 1.4，给 7 项判据 2 行排版留空间
-        height_ratios=[1.4, 3.5, 2.5, 3.5],
+        # 头部 1.4（容纳 2 行判据）；底部 row 3 给 4.2 以容纳 15 行指标表
+        # 中心十字断面 row 2 收紧到 2.0
+        height_ratios=[1.4, 3.5, 2.0, 4.2],
         width_ratios=[1.2, 1],
         hspace=0.45, wspace=0.30,
         left=0.06, right=0.96, top=0.96, bottom=0.04,
@@ -339,8 +340,9 @@ def _build_overview(result):
         colWidths=[0.55, 0.40],
     )
     t1.auto_set_font_size(False)
-    t1.set_fontsize(8.5)
-    t1.scale(1, 1.45)
+    # 15 行 + 表头 = 16 行，需要更紧凑的字号+行高才能放进 row 3
+    t1.set_fontsize(7.5)
+    t1.scale(1, 1.05)
     for j in (0, 1):
         t1[(0, j)].set_facecolor("#dde4ea")
         t1[(0, j)].set_text_props(fontweight="bold")
