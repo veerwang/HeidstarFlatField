@@ -164,9 +164,11 @@ class HeatmapCanvas(_CanvasBase):
         max_pos: tuple | None = None,
     ) -> None:
         self.figure.clear()
-        gs = self.figure.add_gridspec(2, 2, width_ratios=[3, 2], height_ratios=[3, 1])
+        # 布局：热力图独占整列左侧（更大更接近原始正方形），
+        #       直方图 + 中心十字断面在右侧上下堆叠。
+        gs = self.figure.add_gridspec(2, 2, width_ratios=[3, 2], height_ratios=[1, 1])
 
-        ax_img = self.figure.add_subplot(gs[0, 0])
+        ax_img = self.figure.add_subplot(gs[:, 0])
         im = ax_img.imshow(
             normalized,
             cmap="viridis",
@@ -211,14 +213,14 @@ class HeatmapCanvas(_CanvasBase):
 
         h, w = normalized.shape
         cr, cc = h // 2, w // 2
-        ax_cs = self.figure.add_subplot(gs[1, :])
+        ax_cs = self.figure.add_subplot(gs[1, 1])
         ax_cs.plot(normalized[cr, :], label=f"行 {cr}", color="#1f77b4")
         ax_cs.plot(normalized[:, cc], label=f"列 {cc}", color="#d62728")
         ax_cs.set_ylim(0, 1.05)
         ax_cs.set_xlabel("像素位置")
         ax_cs.set_ylabel("归一化强度")
         ax_cs.set_title("中心十字断面")
-        ax_cs.legend(loc="lower right")
+        ax_cs.legend(loc="lower right", fontsize=9)
         ax_cs.grid(True, alpha=0.3)
 
         self.canvas.draw_idle()
