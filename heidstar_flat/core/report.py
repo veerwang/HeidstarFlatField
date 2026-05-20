@@ -55,6 +55,8 @@ def generate_pdf_report(
     from matplotlib.backends.backend_pdf import PdfPages
     from matplotlib.figure import Figure
 
+    from heidstar_flat import __version__
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -91,7 +93,7 @@ def generate_pdf_report(
         # PDF 元数据
         d = pdf.infodict()
         d["Title"] = "Heidstar 多通道平场性检测报告"
-        d["Author"] = "Heidstar Flat"
+        d["Author"] = f"Heidstar Flat v{__version__}"
         d["Subject"] = f"Scan: {scan_root}"
         d["CreationDate"] = datetime.now()
 
@@ -113,6 +115,8 @@ def _close(fig) -> None:
 def _build_cover(results: List, scan_root: str, output_dir: str):
     from matplotlib.figure import Figure
 
+    from heidstar_flat import __version__
+
     fig = Figure(figsize=A4_PORTRAIT)
     fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
 
@@ -129,7 +133,7 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
     )
     ax.text(
         0.5, 0.93,
-        f"生成时间  {now}",
+        f"v{__version__}  ·  生成时间  {now}",
         ha="center", va="top", fontsize=11, color="#555",
         transform=ax.transAxes,
     )

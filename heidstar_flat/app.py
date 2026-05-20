@@ -28,8 +28,11 @@ def main(argv: list[str] | None = None) -> int:
     _configure_qt_env()
     from PyQt5.QtWidgets import QApplication
 
+    from heidstar_flat import __version__
+
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("HeidstarFlat")
+    app.setApplicationVersion(__version__)
     app.setOrganizationName("Heidstar")
     _apply_global_font(app)
 

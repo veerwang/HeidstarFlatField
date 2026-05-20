@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
 
 from datetime import datetime
 
+from heidstar_flat import __version__
 from heidstar_flat.config import AppConfig, load_config, save_config
 from heidstar_flat.core.loader import DiscoveredChannel, discover_channels
 from heidstar_flat.core.metrics import VerdictThresholds
@@ -60,7 +61,7 @@ def _build_thresholds(cfg: AppConfig, per_channel_threshold: float) -> VerdictTh
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Heidstar 多通道平场性检测")
+        self.setWindowTitle(f"Heidstar 多通道平场性检测  v{__version__}")
         self.resize(1280, 860)
 
         self.cfg: AppConfig = load_config()
@@ -290,7 +291,8 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "关于",
-            "Heidstar 多通道图像平场性检测\n\n"
+            f"Heidstar 多通道图像平场性检测\n"
+            f"版本 v{__version__}\n\n"
             "基于 BaSiCPy + PyQt5，"
             "支持 Ubuntu 22.04 / Windows。\n\n"
             "源代码运行: python run.py",
