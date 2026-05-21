@@ -11,11 +11,13 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -95,6 +97,7 @@ class FlatfieldPanel(QWidget):
     log_emitted = pyqtSignal(str)
     log_cleared = pyqtSignal()
     status_changed = pyqtSignal(str)
+    running_changed = pyqtSignal(bool)        # worker 启动/结束 → MainWindow 改 tab 文字
 
     def __init__(self, cfg: AppConfig, parent=None) -> None:
         super().__init__(parent)
@@ -105,9 +108,14 @@ class FlatfieldPanel(QWidget):
         self._discovered: List[DiscoveredChannel] = []
         self._tabs_by_suffix: Dict[str, ChannelTab] = {}
         self._channel_checks: Dict[str, QCheckBox] = {}
+        self._channel_items: Dict[str, QListWidgetItem] = {}  # suffix → list item，用于 U5 高亮
         # 已完成通道的结果，按通道发现顺序累积；用于 PDF 导出
         self._results: List[ChannelResult] = []
         self._last_output_dir: str = ""
+
+        # 本轮 worker 运行的元数据（用于 U3 ETA 计算）
+        self._worker_start_time: Optional[float] = None
+        self._total_jobs_in_run: int = 0
 
         # 扫描子线程（异步发现通道，避免大目录卡 UI）
         self._scan_thread: QThread | None = None
@@ -301,6 +309,7 @@ class FlatfieldPanel(QWidget):
 
         self.channel_list.clear()
         self._channel_checks.clear()
+        self._channel_items.clear()
 
         # 旧扫描的结果与新扫描的通道集合无关，必须清掉；否则用户重扫
         # 后直接「导出 PDF」会把旧结果当成新扫描的数据写进报告
@@ -328,6 +337,7 @@ class FlatfieldPanel(QWidget):
             self.channel_list.setItemWidget(item, cb)
             item.setSizeHint(cb.sizeHint())
             self._channel_checks[ch.suffix] = cb
+            self._channel_items[ch.suffix] = item
 
     # ---------- 槽 ----------
     def _choose_output_dir(self) -> None:
@@ -382,6 +392,10 @@ class FlatfieldPanel(QWidget):
         self._last_output_dir = output_dir
         self.export_btn.setEnabled(False)
 
+        # 记录本轮 worker 元数据（用于 ETA 计算）
+        self._worker_start_time = time.monotonic()
+        self._total_jobs_in_run = len(jobs)
+
         total = len(jobs)
         for i, j in enumerate(jobs, 1):
             tab = self._tabs_by_suffix.get(j.suffix)
@@ -422,6 +436,7 @@ class FlatfieldPanel(QWidget):
         self._thread.finished.connect(self._cleanup_thread)
         self._thread.start()
         self._tick_timer.start()
+        self.running_changed.emit(True)
 
     def _on_stop(self) -> None:
         if self._worker:
@@ -436,7 +451,33 @@ class FlatfieldPanel(QWidget):
             idx = self.tabs.indexOf(tab)
             if idx >= 0:
                 self.tabs.setCurrentIndex(idx)
+        self._highlight_running_channel(suffix)
         self.status_changed.emit(f"{suffix} — {stage}")
+
+    def _highlight_running_channel(self, suffix: Optional[str]) -> None:
+        """高亮 list 里当前在跑的通道；suffix=None 清除所有高亮。"""
+        highlight = QColor("#fff3b0")  # 暖黄色，与 9 区中心格高亮一致
+        normal = QColor()              # 默认背景（透明）
+        for sfx, item in self._channel_items.items():
+            item.setBackground(highlight if sfx == suffix else normal)
+
+    def _emit_eta_update(self) -> None:
+        """根据已完成通道的平均耗时估算剩余时间，往 status_changed 发一行。"""
+        if self._worker_start_time is None or self._total_jobs_in_run <= 0:
+            return
+        completed = len(self._results)
+        if completed == 0:
+            return
+        elapsed = time.monotonic() - self._worker_start_time
+        avg_per = elapsed / completed
+        remaining = self._total_jobs_in_run - completed
+        if remaining <= 0:
+            return
+        eta_sec = int(avg_per * remaining)
+        mm, ss = divmod(eta_sec, 60)
+        self.status_changed.emit(
+            f"完成 {completed}/{self._total_jobs_in_run} 通道  ·  预计剩余 {mm:02d}:{ss:02d}"
+        )
 
     def _on_progress(self, suffix: str, current: int, total: int) -> None:
         if total > 0:
@@ -459,6 +500,7 @@ class FlatfieldPanel(QWidget):
         self._results.append(result)
         self.export_btn.setEnabled(True)
         self.progress.setRange(0, 0)
+        self._emit_eta_update()
 
     def _on_channel_failed(self, suffix: str, msg: str) -> None:
         tab = self._tabs_by_suffix.get(suffix)
@@ -476,8 +518,13 @@ class FlatfieldPanel(QWidget):
         # 统一标记为「已取消」便于用户一眼分清完成 vs 中断
         for tab in self._tabs_by_suffix.values():
             tab.mark_cancelled_if_pending()
+        # 清除 list 高亮 + 重置 ETA 状态
+        self._highlight_running_channel(None)
+        self._worker_start_time = None
+        self._total_jobs_in_run = 0
         self.status_changed.emit("全部完成")
         self.log_emitted.emit("====== 全部通道处理结束 ======")
+        self.running_changed.emit(False)
 
     # ---------- PDF 导出 ----------
     def _on_export_pdf(self) -> None:

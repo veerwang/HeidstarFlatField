@@ -55,6 +55,9 @@ class MainWindow(QMainWindow):
         self.flatfield_panel.log_emitted.connect(self._append_log)
         self.flatfield_panel.log_cleared.connect(self._clear_log_buffer)
         self.flatfield_panel.status_changed.connect(self._on_panel_status)
+        self.flatfield_panel.running_changed.connect(
+            lambda r: self._set_tab_running(self.flatfield_panel, "平场检测", r)
+        )
         self.top_tabs.addTab(self.flatfield_panel, "平场检测")
 
         # 杂散光检测面板
@@ -62,6 +65,9 @@ class MainWindow(QMainWindow):
         self.stray_panel.log_emitted.connect(self._append_log)
         self.stray_panel.log_cleared.connect(self._clear_log_buffer)
         self.stray_panel.status_changed.connect(self._on_panel_status)
+        self.stray_panel.running_changed.connect(
+            lambda r: self._set_tab_running(self.stray_panel, "杂散光检测", r)
+        )
         self.top_tabs.addTab(self.stray_panel, "杂散光检测")
 
         self.setStatusBar(QStatusBar())
@@ -138,6 +144,16 @@ class MainWindow(QMainWindow):
     # ---------- 状态栏 / 日志 ----------
     def _on_panel_status(self, msg: str) -> None:
         self.statusBar().showMessage(msg)
+
+    def _set_tab_running(self, panel, base_name: str, running: bool) -> None:
+        """panel 在跑时给顶级 Tab 标题加 ● 标记，便于切到其他 Tab 时也能看到状态。"""
+        idx = self.top_tabs.indexOf(panel)
+        if idx < 0:
+            return
+        if running:
+            self.top_tabs.setTabText(idx, f"● {base_name}（运行中）")
+        else:
+            self.top_tabs.setTabText(idx, base_name)
 
     def _append_log(self, line: str) -> None:
         self._log_buffer.append(line)
