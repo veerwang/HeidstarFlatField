@@ -36,6 +36,9 @@ class AppConfig:
     min_zone_to_max_threshold: float = 40.0             # 最暗格: min_zone/max_zone
     nine_zone_uniformity_threshold: float = 75.0        # 九格粗糙度: 1-σ_zone/μ_zone
     top_saturation_threshold: float = 5.0               # 顶端饱和率 ≤ 阈值 (% pixels ≥ 0.99)
+    # 杂散光（独立于平场的 2 项 AND 判定，详见 core/stray_light.py）
+    stray_dc_threshold: float = 1.0                     # DC1: dark_mean/sensor_max ≤ 阈值 %
+    stray_zone_dc_uniformity_threshold: float = 60.0    # DC2: 9 区暗本底均匀性 ≥ 阈值 %
     image_subdir: str = "Images"
     image_glob: str = "IMG*.tif"
 
@@ -71,6 +74,10 @@ class AppConfig:
             ),
             top_saturation_threshold=float(
                 data.get("top_saturation_threshold", 5.0)
+            ),
+            stray_dc_threshold=float(data.get("stray_dc_threshold", 1.0)),
+            stray_zone_dc_uniformity_threshold=float(
+                data.get("stray_zone_dc_uniformity_threshold", 60.0)
             ),
             image_subdir=data.get("image_subdir", "Images"),
             image_glob=data.get("image_glob", "IMG*.tif"),
