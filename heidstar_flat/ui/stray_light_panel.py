@@ -74,6 +74,9 @@ def _build_thresholds(cfg: AppConfig) -> StrayLightThresholds:
     return StrayLightThresholds(
         dc_pct_of_max=cfg.stray_dc_threshold,
         zone_dc_uniformity_pct=cfg.stray_zone_dc_uniformity_threshold,
+        dsnu_pct_of_max=cfg.stray_dsnu_threshold,
+        temporal_noise_pct=cfg.stray_temporal_noise_threshold,
+        hot_pixel_pct=cfg.stray_hot_pixel_threshold,
     )
 
 

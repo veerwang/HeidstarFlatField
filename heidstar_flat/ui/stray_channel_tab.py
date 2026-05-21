@@ -48,7 +48,7 @@ def _fmt_elapsed(seconds: float) -> str:
 def _fmt_threshold_label(_thr: StrayLightThresholds) -> str:
     return (
         "<span style='font-size:13pt'>"
-        "判定: 2 项 AND  "
+        "判定: 5 项 AND  "
         "<span style='color:#666'>(详见下方)</span>"
         "</span>"
     )
@@ -56,9 +56,12 @@ def _fmt_threshold_label(_thr: StrayLightThresholds) -> str:
 
 def _threshold_tooltip(thr: StrayLightThresholds) -> str:
     return (
-        "杂散光 2 项 AND 判定阈值：\n"
+        "杂散光 5 项 AND 判定阈值：\n"
         f"① DC1 本底强度        ≤ {thr.dc_pct_of_max:.4f}%\n"
-        f"② DC2 本底均匀性       ≥ {thr.zone_dc_uniformity_pct:.2f}%"
+        f"② DC2 本底均匀性       ≥ {thr.zone_dc_uniformity_pct:.2f}%\n"
+        f"③ DC3 DSNU 像素级     ≤ {thr.dsnu_pct_of_max:.4f}%\n"
+        f"④ DC4 时间噪声底      ≤ {thr.temporal_noise_pct:.4f}%\n"
+        f"⑤ DC5 热像素密度      ≤ {thr.hot_pixel_pct:.4f}%"
     )
 
 

@@ -136,8 +136,9 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
             transform=ax.transAxes)
 
     headers = [
-        "通道", "Fluo", "瓦片", "Sensor max",
-        "Dark mean", "DC1 (%)", "DC2 (%)", "判定",
+        "通道", "Fluo", "瓦片",
+        "DC1 (%)", "DC2 (%)", "DC3 (%)", "DC4 (%)", "DC5 (%)",
+        "判定",
     ]
     rows = []
     for r in results:
@@ -147,10 +148,11 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
             r.job.display_name,
             fluo,
             str(r.num_images),
-            f"{m.sensor_max:.0f}",
-            f"{m.dark_mean:.2f}",
             f"{m.dc_pct_of_max:.4f}",
             f"{m.zone_dc_uniformity_pct:.2f}",
+            f"{m.dsnu_pct_of_max:.4f}",
+            f"{m.temporal_noise_pct:.4f}",
+            f"{m.hot_pixel_pct:.4f}",
             _verdict_text(r.passed),
         ])
 
@@ -161,17 +163,17 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
         loc="upper left", cellLoc="center",
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(8.5)
+    table.set_fontsize(7.5)   # 9 列稍密，缩字号避免溢出
     table.scale(1, 1.7)
 
-    # 染色：DC1 / DC2 / 判定列
+    # 染色：5 项指标列 + 判定列
     for i, r in enumerate(results, 1):
         cell = table[(i, len(headers) - 1)]
         cell.set_facecolor(_verdict_color(r.passed))
         cell.set_text_props(color="white", fontweight="bold")
-        # DC1 列索引 = 5；DC2 列索引 = 6
+        # DC1..DC5 列索引 = 3..7（headers 顺序）
         check_pass = [c.passed for c in r.verdict.checks]
-        for col, ok in zip((5, 6), check_pass):
+        for col, ok in zip(range(3, 3 + len(check_pass)), check_pass):
             c2 = table[(i, col)]
             c2.set_facecolor("#e8f4ec" if ok else "#fbe2e2")
     for j in range(len(headers)):
@@ -180,7 +182,7 @@ def _build_cover(results: List, scan_root: str, output_dir: str):
 
     ax.text(
         0.5, 0.04,
-        "Heidstar Flat — 杂散光暗本底评估（关激发暗场图，2 项 AND 判定）",
+        "Heidstar Flat — 杂散光评估（关激发暗场图，5 项 AND 判定）",
         ha="center", va="bottom", fontsize=9, color="#888",
         transform=ax.transAxes,
     )
@@ -196,7 +198,8 @@ def _build_overview(result):
     fig = Figure(figsize=A4_PORTRAIT)
     gs = fig.add_gridspec(
         3, 2,
-        height_ratios=[1.2, 4.5, 4.0],
+        # 头部加高到 1.6（容纳 5 项判定 2 行排版）；指标行 4.4 给 13 行表
+        height_ratios=[1.6, 4.0, 4.4],
         width_ratios=[1.2, 1],
         hspace=0.45, wspace=0.30,
         left=0.06, right=0.96, top=0.96, bottom=0.04,
@@ -235,14 +238,15 @@ def _build_overview(result):
     meta_line = (
         f"Fluo: {fluo}    曝光: {expo}    增益: {gain}    "
         f"瓦片: {result.num_images}    网格: {grid}    "
-        f"判定: 2 项 AND"
+        f"判定: 5 项 AND"
     )
     ax_hdr.text(
-        0, 0.50, meta_line,
+        0, 0.55, meta_line,
         fontsize=10, color="#444",
         transform=ax_hdr.transAxes,
     )
 
+    # 5 项判据分两行（3 + 2），避免单行超出页面右边被截断
     if getattr(result, "verdict", None) and result.verdict.checks:
         bits = []
         for c in result.verdict.checks:
@@ -252,10 +256,16 @@ def _build_overview(result):
             bits.append(
                 f"[{mark}] {c.name} {c.value_pct:.4f}%{op}{c.threshold_pct:.4f}%"
             )
+        mid = (len(bits) + 1) // 2  # 5 → 3
+        line1 = "   ".join(bits[:mid])
+        line2 = "   ".join(bits[mid:])
         ax_hdr.text(
-            0, 0.10, "    ".join(bits),
-            fontsize=9, color="#222",
+            0, 0.05,
+            f"{line1}\n{line2}",
+            fontsize=8.5, color="#222",
             transform=ax_hdr.transAxes,
+            va="bottom",
+            linespacing=1.6,
         )
 
     # —— 暗场均值热力图（带最亮像素位置标注）——
@@ -297,13 +307,14 @@ def _build_overview(result):
         colWidths=[0.55, 0.40],
     )
     t1.auto_set_font_size(False)
-    t1.set_fontsize(9.0)
-    t1.scale(1, 1.5)
+    # 13 行 + 表头 → 缩字号 + 行高才能放进 row 2
+    t1.set_fontsize(7.5)
+    t1.scale(1, 1.1)
     for j in (0, 1):
         t1[(0, j)].set_facecolor("#dde4ea")
         t1[(0, j)].set_text_props(fontweight="bold")
-    # ★ 判定指标行（前两行）加粗
-    for i in (1, 2):
+    # ★ 判定指标行（前 5 行）加粗
+    for i in range(1, 6):
         if i <= len(rows):
             for j in (0, 1):
                 t1[(i, j)].set_text_props(fontweight="bold")

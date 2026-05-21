@@ -36,9 +36,12 @@ class AppConfig:
     min_zone_to_max_threshold: float = 40.0             # 最暗格: min_zone/max_zone
     nine_zone_uniformity_threshold: float = 75.0        # 九格粗糙度: 1-σ_zone/μ_zone
     top_saturation_threshold: float = 5.0               # 顶端饱和率 ≤ 阈值 (% pixels ≥ 0.99)
-    # 杂散光（独立于平场的 2 项 AND 判定，详见 core/stray_light.py）
+    # 杂散光（独立于平场的 5 项 AND 判定，详见 core/stray_light.py）
     stray_dc_threshold: float = 1.0                     # DC1: dark_mean/sensor_max ≤ 阈值 %
     stray_zone_dc_uniformity_threshold: float = 60.0    # DC2: 9 区暗本底均匀性 ≥ 阈值 %
+    stray_dsnu_threshold: float = 0.5                   # DC3: DSNU 像素级 / sensor_max ≤ 阈值 %
+    stray_temporal_noise_threshold: float = 1.0         # DC4: 时间噪声底 / sensor_max ≤ 阈值 %
+    stray_hot_pixel_threshold: float = 0.01             # DC5: 热像素占比 ≤ 阈值 % (≈ 100 ppm)
     image_subdir: str = "Images"
     image_glob: str = "IMG*.tif"
 
@@ -78,6 +81,13 @@ class AppConfig:
             stray_dc_threshold=float(data.get("stray_dc_threshold", 1.0)),
             stray_zone_dc_uniformity_threshold=float(
                 data.get("stray_zone_dc_uniformity_threshold", 60.0)
+            ),
+            stray_dsnu_threshold=float(data.get("stray_dsnu_threshold", 0.5)),
+            stray_temporal_noise_threshold=float(
+                data.get("stray_temporal_noise_threshold", 1.0)
+            ),
+            stray_hot_pixel_threshold=float(
+                data.get("stray_hot_pixel_threshold", 0.01)
             ),
             image_subdir=data.get("image_subdir", "Images"),
             image_glob=data.get("image_glob", "IMG*.tif"),
