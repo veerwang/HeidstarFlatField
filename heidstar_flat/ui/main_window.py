@@ -9,8 +9,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List
 
+from PyQt5.QtCore import QUrl
+from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QAction,
     QMainWindow,
@@ -74,6 +77,11 @@ class MainWindow(QMainWindow):
         act_log.setShortcut("Ctrl+L")
         act_log.triggered.connect(self._show_log_dialog)
         tb.addAction(act_log)
+        act_criteria = QAction("判据说明", self)
+        act_criteria.setShortcut("F1")
+        act_criteria.setToolTip("打开 docs/CRITERIA.pdf — 平场 + 杂散光所有判据详解")
+        act_criteria.triggered.connect(self._open_criteria_doc)
+        tb.addAction(act_criteria)
         act_about = QAction("关于", self)
         act_about.triggered.connect(self._show_about)
         tb.addAction(act_about)
@@ -90,6 +98,31 @@ class MainWindow(QMainWindow):
             # 通知所有面板配置变了，刷新阈值/显示名等
             self.flatfield_panel.on_config_changed(self.cfg)
             self.stray_panel.on_config_changed(self.cfg)
+
+    def _open_criteria_doc(self) -> None:
+        """用系统默认 PDF 阅读器打开 docs/CRITERIA.pdf。"""
+        # main_window.py 在 heidstar_flat/ui/，向上回到仓库根，再进 docs/
+        pdf_path = (
+            Path(__file__).resolve().parent.parent.parent / "docs" / "CRITERIA.pdf"
+        )
+        if not pdf_path.is_file():
+            QMessageBox.warning(
+                self,
+                "判据说明 PDF 未找到",
+                f"找不到 {pdf_path}\n\n"
+                f"该 PDF 需要从 CRITERIA.md 构建生成：\n"
+                f"    python scripts/build_criteria_pdf.py\n\n"
+                f"作为备选，可直接打开仓库根的 CRITERIA.md 阅读。",
+            )
+            return
+        url = QUrl.fromLocalFile(str(pdf_path))
+        if not QDesktopServices.openUrl(url):
+            QMessageBox.warning(
+                self,
+                "打开失败",
+                f"系统无法打开 PDF 文件：\n{pdf_path}\n\n"
+                f"请检查是否安装了 PDF 阅读器。",
+            )
 
     def _show_about(self) -> None:
         QMessageBox.information(
