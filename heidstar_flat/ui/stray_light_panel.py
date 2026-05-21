@@ -31,9 +31,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from datetime import datetime
+
 from heidstar_flat.config import AppConfig
 from heidstar_flat.core.loader import DiscoveredChannel, discover_channels
 from heidstar_flat.core.stray_light import StrayLightThresholds
+from heidstar_flat.core.stray_report import generate_stray_pdf_report
 from heidstar_flat.stray_worker import (
     StrayChannelJob,
     StrayChannelResult,
@@ -168,7 +171,7 @@ class StrayLightPanel(QWidget):
         self.export_btn = QPushButton("导出 PDF 报告")
         self.export_btn.clicked.connect(self._on_export_pdf)
         self.export_btn.setEnabled(False)
-        self.export_btn.setToolTip("杂散光 PDF 报告（B4 待实现）")
+        self.export_btn.setToolTip("至少需要完成一个通道才能导出。")
         ctrl_layout.addWidget(self.start_btn)
         ctrl_layout.addWidget(self.stop_btn)
         ctrl_layout.addWidget(self.export_btn)
@@ -425,8 +428,7 @@ class StrayLightPanel(QWidget):
         if tab is not None:
             tab.on_result(result)
         self._results.append(result)
-        # B4 完成 PDF 后才打开此按钮；当前 PDF 未实现，保持灰但 tooltip 提示
-        # self.export_btn.setEnabled(True)
+        self.export_btn.setEnabled(True)
         self.progress.setRange(0, 0)
 
     def _on_channel_failed(self, suffix: str, msg: str) -> None:
@@ -445,12 +447,62 @@ class StrayLightPanel(QWidget):
         self.status_changed.emit("杂散光评估完成")
         self.log_emitted.emit("====== [杂散光] 全部通道处理结束 ======")
 
-    # ---------- PDF 导出（B4 占位） ----------
+    # ---------- PDF 导出 ----------
     def _on_export_pdf(self) -> None:
-        QMessageBox.information(
-            self, "提示",
-            "杂散光 PDF 报告将在 B4 实现，当前按钮无效。"
+        if not self._results:
+            QMessageBox.information(
+                self, "提示", "尚无已完成的通道结果，无法导出。"
+            )
+            return
+
+        default_dir = (
+            self._last_output_dir or self.output_edit.text().strip() or "."
         )
+        default_name = (
+            f"stray_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        )
+        default_path = str(Path(default_dir) / default_name)
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出杂散光 PDF 报告", default_path, "PDF 文件 (*.pdf)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
+            path += ".pdf"
+
+        self.export_btn.setEnabled(False)
+        self.start_btn.setEnabled(False)
+        self.log_emitted.emit(f"[杂散光] 开始导出 PDF 报告 → {path}")
+
+        def on_progress(label: str, cur: int, total: int) -> None:
+            self.status_changed.emit(f"导出杂散光 PDF — {label} ({cur}/{total})")
+            QApplication.processEvents()
+
+        try:
+            scan_root = self.input_edit.text().strip()
+            generate_stray_pdf_report(
+                results=self._results,
+                output_path=path,
+                scan_root=scan_root,
+                output_dir=self._last_output_dir or "",
+                progress_fn=on_progress,
+            )
+        except Exception as e:
+            self.log_emitted.emit(f"[杂散光] 导出失败: {e}")
+            QMessageBox.warning(self, "导出失败", f"PDF 导出过程中出错:\n{e}")
+            self.status_changed.emit("导出失败")
+        else:
+            self.log_emitted.emit(f"[杂散光] PDF 报告已生成: {path}")
+            self.status_changed.emit(f"PDF 已生成: {path}")
+            QMessageBox.information(
+                self, "导出完成", f"杂散光 PDF 报告已保存到:\n{path}"
+            )
+        finally:
+            self.export_btn.setEnabled(True)
+            # 仅当 worker 不在跑才重开开始按钮，避免双 worker
+            if self._thread is None or not self._thread.isRunning():
+                self.start_btn.setEnabled(True)
 
     def _cleanup_thread(self) -> None:
         if self._thread is not None:
