@@ -11,75 +11,60 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from heidstar_flat.config import AppConfig, ChannelPref, default_channel_prefs
+
+
+def _section_label(text: str) -> QLabel:
+    """分节标题（在 QFormLayout 中 addRow 单参时跨整行显示）。"""
+    lbl = QLabel(f"<b style='color:#1a4d8f; font-size:11pt'>{text}</b>")
+    lbl.setContentsMargins(0, 6, 0, 2)
+    return lbl
+
+
+def _make_spin(value: float, decimals: int = 2, vmax: float = 100.0,
+               tooltip: str | None = None) -> QDoubleSpinBox:
+    s = QDoubleSpinBox()
+    s.setRange(0.0, vmax)
+    s.setDecimals(decimals)
+    s.setValue(value)
+    if tooltip:
+        s.setToolTip(tooltip)
+    return s
 
 
 class SettingsDialog(QDialog):
     def __init__(self, cfg: AppConfig, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("通道偏好与全局设置")
-        self.resize(680, 460)
+        self.resize(720, 720)
 
         root = QVBoxLayout(self)
 
-        form = QFormLayout()
+        # ---- 表单内容包在 QScrollArea 里，避免高分屏过满或低分屏被裁 ----
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        inner = QWidget()
+        scroll.setWidget(inner)
+        form = QFormLayout(inner)
+
+        # ===== 全局参数 =====
+        form.addRow(_section_label("全局参数"))
         self.examples_spin = QSpinBox()
         self.examples_spin.setRange(0, 20)
         self.examples_spin.setValue(cfg.examples_per_channel)
         form.addRow("每通道示例数", self.examples_spin)
-
-        self.default_thr_spin = QDoubleSpinBox()
-        self.default_thr_spin.setRange(0.0, 100.0)
-        self.default_thr_spin.setDecimals(2)
-        self.default_thr_spin.setValue(cfg.default_threshold)
-        form.addRow("默认 robust Min/Max 阈值 (%)", self.default_thr_spin)
-
-        self.cv_thr_spin = QDoubleSpinBox()
-        self.cv_thr_spin.setRange(0.0, 100.0)
-        self.cv_thr_spin.setDecimals(2)
-        self.cv_thr_spin.setValue(cfg.cv_threshold)
-        form.addRow("全局 CV 均匀性阈值 (%)", self.cv_thr_spin)
-
-        self.corner_sym_spin = QDoubleSpinBox()
-        self.corner_sym_spin.setRange(0.0, 100.0)
-        self.corner_sym_spin.setDecimals(2)
-        self.corner_sym_spin.setValue(cfg.corner_symmetry_threshold)
-        form.addRow("九区 四角对称阈值 (%)", self.corner_sym_spin)
-
-        self.center_max_spin = QDoubleSpinBox()
-        self.center_max_spin.setRange(0.0, 100.0)
-        self.center_max_spin.setDecimals(2)
-        self.center_max_spin.setValue(cfg.center_to_max_threshold)
-        form.addRow("九区 中心最亮阈值 (%)", self.center_max_spin)
-
-        self.min_zone_spin = QDoubleSpinBox()
-        self.min_zone_spin.setRange(0.0, 100.0)
-        self.min_zone_spin.setDecimals(2)
-        self.min_zone_spin.setValue(cfg.min_zone_to_max_threshold)
-        form.addRow("九区 最暗格阈值 (%)", self.min_zone_spin)
-
-        self.nz_unif_spin = QDoubleSpinBox()
-        self.nz_unif_spin.setRange(0.0, 100.0)
-        self.nz_unif_spin.setDecimals(2)
-        self.nz_unif_spin.setValue(cfg.nine_zone_uniformity_threshold)
-        form.addRow("九区 粗糙度阈值 (%)", self.nz_unif_spin)
-
-        self.top_sat_spin = QDoubleSpinBox()
-        self.top_sat_spin.setRange(0.0, 100.0)
-        self.top_sat_spin.setDecimals(2)
-        self.top_sat_spin.setValue(cfg.top_saturation_threshold)
-        self.top_sat_spin.setToolTip(
-            "顶端饱和率上限 (% pixels ≥ 0.99)：超过则判 FAIL，提示 BaSiC 过拟合或中心平台"
-        )
-        form.addRow("顶端饱和率上限 (%, ≤)", self.top_sat_spin)
 
         self.output_subdir_edit = QLineEdit(cfg.output_subdir)
         form.addRow("输出子目录名", self.output_subdir_edit)
@@ -90,7 +75,70 @@ class SettingsDialog(QDialog):
         self.image_glob_edit = QLineEdit(cfg.image_glob)
         form.addRow("瓦片 glob 模式", self.image_glob_edit)
 
-        root.addLayout(form)
+        # ===== 平场判据阈值（7 项 AND）=====
+        form.addRow(_section_label("平场判据阈值（7 项 AND）"))
+
+        self.default_thr_spin = _make_spin(cfg.default_threshold)
+        form.addRow("默认 robust Min/Max 阈值 (%, ≥)", self.default_thr_spin)
+
+        self.cv_thr_spin = _make_spin(cfg.cv_threshold)
+        form.addRow("CV 均匀性阈值 (%, ≥)", self.cv_thr_spin)
+
+        self.corner_sym_spin = _make_spin(cfg.corner_symmetry_threshold)
+        form.addRow("九区 四角对称阈值 (%, ≥)", self.corner_sym_spin)
+
+        self.center_max_spin = _make_spin(cfg.center_to_max_threshold)
+        form.addRow("九区 中心最亮阈值 (%, ≥)", self.center_max_spin)
+
+        self.min_zone_spin = _make_spin(cfg.min_zone_to_max_threshold)
+        form.addRow("九区 最暗格阈值 (%, ≥)", self.min_zone_spin)
+
+        self.nz_unif_spin = _make_spin(cfg.nine_zone_uniformity_threshold)
+        form.addRow("九区 粗糙度阈值 (%, ≥)", self.nz_unif_spin)
+
+        self.top_sat_spin = _make_spin(
+            cfg.top_saturation_threshold,
+            tooltip="顶端饱和率上限 (% pixels ≥ 0.99)：超过则判 FAIL，提示 BaSiC 过拟合或中心平台",
+        )
+        form.addRow("顶端饱和率上限 (%, ≤)", self.top_sat_spin)
+
+        # ===== 杂散光判据阈值（5 项 AND）=====
+        form.addRow(_section_label("杂散光判据阈值（5 项 AND）"))
+
+        self.stray_dc_spin = _make_spin(
+            cfg.stray_dc_threshold, decimals=4,
+            tooltip="DC1: dark_mean / sensor_max ≤ 阈值；典型 sCMOS << 1%",
+        )
+        form.addRow("DC1 本底强度 (%, ≤)", self.stray_dc_spin)
+
+        self.stray_zone_spin = _make_spin(
+            cfg.stray_zone_dc_uniformity_threshold,
+            tooltip="DC2: 9 区暗本底均匀性 (1−σ/μ) ≥ 阈值；局部杂光斑会拉低",
+        )
+        form.addRow("DC2 本底均匀性 (%, ≥)", self.stray_zone_spin)
+
+        self.stray_dsnu_spin = _make_spin(
+            cfg.stray_dsnu_threshold, decimals=4,
+            tooltip="DC3: DSNU 像素级 std(mean_image)/sensor_max ≤ 阈值；EMVA 1288 DSNU 粗版",
+        )
+        form.addRow("DC3 DSNU 像素级 (%, ≤)", self.stray_dsnu_spin)
+
+        self.stray_temporal_spin = _make_spin(
+            cfg.stray_temporal_noise_threshold, decimals=4,
+            tooltip="DC4: median(per-pixel std over frames)/sensor_max ≤ 阈值；σ_temporal",
+        )
+        form.addRow("DC4 时间噪声底 (%, ≤)", self.stray_temporal_spin)
+
+        self.stray_hot_spin = _make_spin(
+            cfg.stray_hot_pixel_threshold, decimals=4,
+            tooltip="DC5: 热像素 (mean_pixel > μ+10σ_DSNU) 占总像素的比例上限；0.01% ≈ 100 ppm",
+        )
+        form.addRow("DC5 热像素密度 (%, ≤)", self.stray_hot_spin)
+
+        # ===== 通道偏好（per-channel 显示名 / robust Min/Max 阈值）=====
+        form.addRow(_section_label("通道偏好（per-channel 显示名与 Min/Max 阈值）"))
+
+        root.addWidget(scroll, 1)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(
@@ -166,6 +214,11 @@ class SettingsDialog(QDialog):
             min_zone_to_max_threshold=float(self.min_zone_spin.value()),
             nine_zone_uniformity_threshold=float(self.nz_unif_spin.value()),
             top_saturation_threshold=float(self.top_sat_spin.value()),
+            stray_dc_threshold=float(self.stray_dc_spin.value()),
+            stray_zone_dc_uniformity_threshold=float(self.stray_zone_spin.value()),
+            stray_dsnu_threshold=float(self.stray_dsnu_spin.value()),
+            stray_temporal_noise_threshold=float(self.stray_temporal_spin.value()),
+            stray_hot_pixel_threshold=float(self.stray_hot_spin.value()),
             image_subdir=self.image_subdir_edit.text().strip() or "Images",
             image_glob=self.image_glob_edit.text().strip() or "IMG*.tif",
         )
