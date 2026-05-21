@@ -1,0 +1,5 @@
+# 开发期依赖（运行 GUI 不需要）
+pytest>=7.0
+# 用于 docs/CRITERIA.pdf 构建
+markdown>=3.0
+weasyprint>=60
