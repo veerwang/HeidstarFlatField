@@ -241,6 +241,87 @@ class HeatmapCanvas(_CanvasBase):
 
         self.canvas.draw_idle()
 
+    def show_dark_mean(
+        self,
+        dark_mean: np.ndarray,
+        sensor_max: float,
+        title: str = "",
+        max_pos: tuple | None = None,
+    ) -> None:
+        """暗场均值图 + 灰度分布 + 9 区均值 mini 热力图。
+
+        与 show_flatfield 的区别：
+        - vmin/vmax 用 dark_mean 实际范围（暗场总体很暗、绝对值小），
+          否则按 [0,1] 整图一团黑色看不出空间结构
+        - 标注最亮像素位置（疑似杂光斑）
+        - 右下用 9 区 mini 热力图替代中心十字断面（暗场断面没信息）
+        """
+        self.figure.clear()
+        gs = self.figure.add_gridspec(2, 2, width_ratios=[3, 2], height_ratios=[1, 1])
+
+        ax_img = self.figure.add_subplot(gs[:, 0])
+        vmin = float(dark_mean.min())
+        vmax = float(max(dark_mean.max(), vmin + 1e-6))  # 防止 vmin == vmax
+        im = ax_img.imshow(
+            dark_mean, cmap="viridis", vmin=vmin, vmax=vmax,
+            origin="upper", aspect="equal",
+        )
+        ax_img.set_title(title or "暗场均值图")
+        ax_img.set_xlabel("X (pixels)")
+        ax_img.set_ylabel("Y (pixels)")
+        self.figure.colorbar(im, ax=ax_img, fraction=0.046, pad=0.04, label="灰度值")
+
+        if max_pos is not None:
+            r, c = max_pos
+            ax_img.plot(
+                c, r, "o",
+                color="red", markersize=14, markeredgewidth=2.2,
+                markerfacecolor="none",
+                label=f"Max @ ({r},{c})",
+            )
+            ax_img.legend(loc="upper right", framealpha=0.85, fontsize=9)
+
+        # 右上：灰度分布
+        ax_hist = self.figure.add_subplot(gs[0, 1])
+        ax_hist.hist(
+            dark_mean.ravel(), bins=50,
+            color="#3a6ea5", edgecolor="black", alpha=0.8,
+        )
+        ax_hist.set_title("灰度分布")
+        ax_hist.set_xlabel("灰度值")
+        ax_hist.set_ylabel("像素数")
+        ax_hist.grid(True, alpha=0.3)
+
+        # 右下：9 区 mini 热力图（直观看暗本底空间分布）
+        h, w = dark_mean.shape
+        rs = np.linspace(0, h, 4, dtype=int)
+        cs = np.linspace(0, w, 4, dtype=int)
+        zone_grid = np.zeros((3, 3))
+        for i in range(3):
+            for j in range(3):
+                zone_grid[i, j] = float(
+                    dark_mean[rs[i]:rs[i + 1], cs[j]:cs[j + 1]].mean()
+                )
+        ax_zone = self.figure.add_subplot(gs[1, 1])
+        ax_zone.imshow(zone_grid, cmap="viridis", vmin=vmin, vmax=vmax, aspect="auto")
+        ax_zone.set_title(
+            f"9 区均值（占满量程 {dark_mean.mean()/sensor_max*100:.3f}%）",
+            fontsize=10,
+        )
+        ax_zone.set_xticks([0, 1, 2])
+        ax_zone.set_yticks([0, 1, 2])
+        midpoint = (vmin + vmax) / 2
+        for i in range(3):
+            for j in range(3):
+                ax_zone.text(
+                    j, i, f"{zone_grid[i, j]:.1f}",
+                    ha="center", va="center",
+                    color="white" if zone_grid[i, j] < midpoint else "black",
+                    fontsize=9,
+                )
+
+        self.canvas.draw_idle()
+
 
 class ExampleTripletCanvas(_CanvasBase):
     """一张原图 / 校正后 / 差异的三联画。"""

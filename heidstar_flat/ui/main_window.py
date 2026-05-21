@@ -11,10 +11,8 @@ from __future__ import annotations
 
 from typing import List
 
-from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QAction,
-    QLabel,
     QMainWindow,
     QMessageBox,
     QStatusBar,
@@ -27,6 +25,7 @@ from heidstar_flat.config import AppConfig, load_config, save_config
 from heidstar_flat.ui.flatfield_panel import FlatfieldPanel
 from heidstar_flat.ui.log_dialog import LogDialog
 from heidstar_flat.ui.settings_dialog import SettingsDialog
+from heidstar_flat.ui.stray_light_panel import StrayLightPanel
 
 
 class MainWindow(QMainWindow):
@@ -55,17 +54,12 @@ class MainWindow(QMainWindow):
         self.flatfield_panel.status_changed.connect(self._on_panel_status)
         self.top_tabs.addTab(self.flatfield_panel, "平场检测")
 
-        # 杂散光检测面板：B3 实现，当前占位
-        placeholder = QLabel(
-            "杂散光检测面板\n\n"
-            "（即将实现）此处将提供：\n"
-            "  · 选关激发暗场扫描根目录\n"
-            "  · 发现通道 → 计算 DC1 / DC2 指标\n"
-            "  · 独立的 PASS / FAIL 徽章与 PDF 报告"
-        )
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setStyleSheet("QLabel { color: #888; font-size: 12pt; }")
-        self.top_tabs.addTab(placeholder, "杂散光检测")
+        # 杂散光检测面板
+        self.stray_panel = StrayLightPanel(self.cfg, self)
+        self.stray_panel.log_emitted.connect(self._append_log)
+        self.stray_panel.log_cleared.connect(self._clear_log_buffer)
+        self.stray_panel.status_changed.connect(self._on_panel_status)
+        self.top_tabs.addTab(self.stray_panel, "杂散光检测")
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("就绪。请选择扫描根目录。")
@@ -95,6 +89,7 @@ class MainWindow(QMainWindow):
                 self._append_log(f"保存配置失败: {e}")
             # 通知所有面板配置变了，刷新阈值/显示名等
             self.flatfield_panel.on_config_changed(self.cfg)
+            self.stray_panel.on_config_changed(self.cfg)
 
     def _show_about(self) -> None:
         QMessageBox.information(
@@ -135,15 +130,15 @@ class MainWindow(QMainWindow):
         self._log_dialog.activateWindow()
 
     # ---------- 关窗 ----------
+    def _all_panels(self):
+        return (self.flatfield_panel, self.stray_panel)
+
     def closeEvent(self, event) -> None:
-        # 后续 B3 加杂散光面板后，需要遍历检查所有面板
-        running_panels = [
-            p for p in (self.flatfield_panel,) if p.is_running()
-        ]
+        running_panels = [p for p in self._all_panels() if p.is_running()]
 
         # 没有计算线程在跑，直接关
         if not running_panels:
-            for p in (self.flatfield_panel,):
+            for p in self._all_panels():
                 p.block_pending_signals()
                 p.stop_timers()
             event.accept()
@@ -173,6 +168,6 @@ class MainWindow(QMainWindow):
             for p in running_panels:
                 p.request_stop_and_wait(10 * 60 * 1000)  # 6000 × 100ms = 10 min
 
-        for p in (self.flatfield_panel,):
+        for p in self._all_panels():
             p.stop_timers()
         event.accept()
