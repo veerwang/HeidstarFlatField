@@ -85,9 +85,9 @@ def generate_stray_pdf_report(
 
 
 def _close(fig) -> None:
+    """显式 clear figure 释放内存（不用 pyplot.close，保证线程安全）。"""
     try:
-        import matplotlib.pyplot as plt
-        plt.close(fig)
+        fig.clear()
     except Exception:
         pass
 

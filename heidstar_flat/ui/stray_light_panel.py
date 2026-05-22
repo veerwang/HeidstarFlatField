@@ -39,6 +39,7 @@ from heidstar_flat.config import AppConfig
 from heidstar_flat.core.loader import DiscoveredChannel, discover_channels
 from heidstar_flat.core.stray_light import StrayLightThresholds
 from heidstar_flat.core.stray_report import generate_stray_pdf_report
+from heidstar_flat.pdf_export_worker import PdfExportWorker, make_pdf_export_thread
 from heidstar_flat.stray_worker import (
     StrayChannelJob,
     StrayChannelResult,
@@ -109,6 +110,10 @@ class StrayLightPanel(QWidget):
 
         self._scan_thread: QThread | None = None
         self._scan_worker: _ScanWorker | None = None
+
+        # PDF 导出子线程（异步生成报告，避免 processEvents hack）
+        self._pdf_thread: QThread | None = None
+        self._pdf_worker: PdfExportWorker | None = None
 
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(1000)
@@ -503,6 +508,8 @@ class StrayLightPanel(QWidget):
                 self, "提示", "尚无已完成的通道结果，无法导出。"
             )
             return
+        if self._pdf_thread is not None and self._pdf_thread.isRunning():
+            return
 
         default_dir = (
             self._last_output_dir or self.output_edit.text().strip() or "."
@@ -523,35 +530,49 @@ class StrayLightPanel(QWidget):
         self.export_btn.setEnabled(False)
         self.start_btn.setEnabled(False)
         self.log_emitted.emit(f"[杂散光] 开始导出 PDF 报告 → {path}")
+        self.status_changed.emit(f"导出杂散光 PDF 报告中 → {Path(path).name}")
 
-        def on_progress(label: str, cur: int, total: int) -> None:
-            self.status_changed.emit(f"导出杂散光 PDF — {label} ({cur}/{total})")
-            QApplication.processEvents()
-
-        try:
-            scan_root = self.input_edit.text().strip()
-            generate_stray_pdf_report(
-                results=self._results,
+        self._pdf_worker = PdfExportWorker(
+            report_fn=generate_stray_pdf_report,
+            kwargs=dict(
+                results=list(self._results),
                 output_path=path,
-                scan_root=scan_root,
+                scan_root=self.input_edit.text().strip(),
                 output_dir=self._last_output_dir or "",
-                progress_fn=on_progress,
-            )
-        except Exception as e:
-            self.log_emitted.emit(f"[杂散光] 导出失败: {e}")
-            QMessageBox.warning(self, "导出失败", f"PDF 导出过程中出错:\n{e}")
-            self.status_changed.emit("导出失败")
-        else:
-            self.log_emitted.emit(f"[杂散光] PDF 报告已生成: {path}")
-            self.status_changed.emit(f"PDF 已生成: {path}")
-            QMessageBox.information(
-                self, "导出完成", f"杂散光 PDF 报告已保存到:\n{path}"
-            )
-        finally:
-            self.export_btn.setEnabled(True)
-            # 仅当 worker 不在跑才重开开始按钮，避免双 worker
-            if self._thread is None or not self._thread.isRunning():
-                self.start_btn.setEnabled(True)
+            ),
+        )
+        self._pdf_thread = make_pdf_export_thread(self._pdf_worker)
+        self._pdf_worker.progress.connect(self._on_pdf_progress)
+        self._pdf_worker.finished.connect(self._on_pdf_success)
+        self._pdf_worker.failed.connect(self._on_pdf_failed)
+        self._pdf_thread.finished.connect(self._cleanup_pdf_thread)
+        self._pdf_thread.start()
+
+    def _on_pdf_progress(self, label: str, cur: int, total: int) -> None:
+        self.status_changed.emit(f"导出杂散光 PDF — {label} ({cur}/{total})")
+
+    def _on_pdf_success(self, path: str) -> None:
+        self.log_emitted.emit(f"[杂散光] PDF 报告已生成: {path}")
+        self.status_changed.emit(f"PDF 已生成: {path}")
+        QMessageBox.information(
+            self, "导出完成", f"杂散光 PDF 报告已保存到:\n{path}"
+        )
+
+    def _on_pdf_failed(self, err: str) -> None:
+        self.log_emitted.emit(f"[杂散光] 导出失败: {err}")
+        QMessageBox.warning(self, "导出失败", f"PDF 导出过程中出错:\n{err}")
+        self.status_changed.emit("导出失败")
+
+    def _cleanup_pdf_thread(self) -> None:
+        if self._pdf_thread is not None:
+            self._pdf_thread.deleteLater()
+            self._pdf_thread = None
+        if self._pdf_worker is not None:
+            self._pdf_worker.deleteLater()
+            self._pdf_worker = None
+        self.export_btn.setEnabled(True)
+        if self._thread is None or not self._thread.isRunning():
+            self.start_btn.setEnabled(True)
 
     def _cleanup_thread(self) -> None:
         if self._thread is not None:
@@ -566,7 +587,7 @@ class StrayLightPanel(QWidget):
         return self._thread is not None and self._thread.isRunning()
 
     def block_pending_signals(self) -> None:
-        for w in (self._worker, self._scan_worker):
+        for w in (self._worker, self._scan_worker, self._pdf_worker):
             if w is None:
                 continue
             try:

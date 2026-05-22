@@ -101,11 +101,13 @@ def generate_pdf_report(
 
 
 def _close(fig) -> None:
-    """安全关闭 figure，释放内存。"""
-    try:
-        import matplotlib.pyplot as plt
+    """显式 clear figure 释放 axes 引用，让 GC 回收内存。
 
-        plt.close(fig)
+    不用 pyplot.close —— Figure 是直接 new 出来的（非 pyplot.figure），
+    pyplot.close 对其无效，且在 worker 线程里调可能触发 backend 警告。
+    """
+    try:
+        fig.clear()
     except Exception:
         pass
 
